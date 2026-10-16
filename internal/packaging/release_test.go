@@ -443,6 +443,7 @@ func TestRenderedInstallerRejectsUnsupportedNativeArchitectureBeforeMutation(t *
 	commands := map[string]string{
 		"id":    "#!/bin/sh\nif [ \"${1-}\" = -u ]; then echo 0; else /usr/bin/id \"$@\"; fi\n",
 		"dpkg":  "#!/bin/sh\nprintf '%s\\n' armhf\n",
+		"sed":   "#!/bin/sh\ncase \"${2-}\" in 's/^ID=//p') printf '%s\\n' raspbian ;; 's/^VERSION_ID=//p') printf '%s\\n' 13 ;; *) exec /usr/bin/sed \"$@\" ;; esac\n",
 		"uname": "#!/bin/sh\nprintf '%s\\n' aarch64\n",
 	}
 	for name, body := range commands {
