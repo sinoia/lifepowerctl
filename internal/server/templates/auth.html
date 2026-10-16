@@ -1,0 +1,29 @@
+{{ define "setup" }}{{ template "auth-header" . }}
+  <section class="card">
+    <p>Create the single owner password for this controller. Use at least 12 characters; spaces and passphrases are welcome.</p>
+    {{ if .Error }}<div class="notice notice-warning" role="alert">{{ .Error }}</div>{{ end }}
+    {{ if not .SetupToken }}<div class="notice notice-warning" role="status">This setup link has no token. Generate a new link with the local administration command.</div>{{ end }}
+    <form action="/setup" method="post" data-busy-form data-busy-label="Creating owner…">
+      <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+      <input type="hidden" name="setup_token" value="{{ .SetupToken }}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+      <label for="password-confirmation">Confirm password</label>
+      <input id="password-confirmation" name="password_confirmation" type="password" minlength="12" maxlength="256" autocomplete="new-password" required>
+      <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Create owner</span></button></div>
+    </form>
+  </section>
+{{ template "auth-footer" . }}{{ end }}
+
+{{ define "login" }}{{ template "auth-header" . }}
+  <section class="card">
+    <p>Sign in as the controller owner.</p>
+    {{ if .Error }}<div class="notice notice-warning" role="alert">{{ .Error }}</div>{{ end }}
+    <form action="/login" method="post" data-busy-form data-busy-label="Signing in…">
+      <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" maxlength="256" autocomplete="current-password" required>
+      <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Sign in</span></button></div>
+    </form>
+  </section>
+{{ template "auth-footer" . }}{{ end }}

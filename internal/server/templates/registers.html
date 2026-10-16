@@ -1,0 +1,128 @@
+{{ define "register-list" }}{{ template "header" . }}
+  <div class="page-heading">
+    <p class="eyebrow">Reviewed register set</p>
+    <h1>Registers</h1>
+    <p class="lead">Live values and application-authored guidance for compatible LiFePO4wered/Pi+ hardware.</p>
+  </div>
+  <div class="notice notice-warning"><strong>Temporary editing is deliberately narrow.</strong> Most registers remain read-only or require a specialised workflow. Viewing and refreshing never changes board configuration.</div>
+  <article class="card state-card" data-state="{{ .Tone }}">
+    <p class="state-label">{{ .Label }}</p><p>{{ .Summary }}</p>
+    <dl class="status-list"><div><dt>Register set</dt><dd>{{ .RegisterSet }}</dd></div><div><dt>Checked</dt><dd>{{ .CheckedAt }}</dd></div></dl>
+    <form action="/registers" method="get" data-busy-form data-busy-label="Reading registers…"><div class="button-row"><button type="submit" data-submit-button><span data-button-label>Refresh values</span></button></div></form>
+  </article>
+  <article class="card"><h2>Battery thresholds</h2><p>Stage <code>VBAT_MIN</code>, <code>VBAT_SHDN</code>, and <code>VBAT_BOOT</code> as one validated temporary configuration using the exact millivolt values exposed by the vendor CLI.</p><div class="button-row"><a class="button-primary" href="/registers/battery-thresholds/edit">Edit battery thresholds</a></div></article>
+  <article class="card"><h2>Shutdown and reboot delay</h2><p>Temporarily adjust <code>SHDN_DELAY</code> when a newer Raspberry Pi needs more time to pass through its bootloader during reboot.</p><div class="button-row"><a class="button-primary" href="/registers/shutdown-delay/edit">Edit shutdown delay</a></div></article>
+  {{ range .Groups }}<section><h2>{{ .Name }}</h2><div class="table-wrap"><table>
+    <thead><tr><th>Register</th><th>Meaning</th><th>Current value</th><th>Storage</th></tr></thead>
+    <tbody>{{ range .Items }}<tr><td><a href="/registers/{{ .Name }}"><code>{{ .Name }}</code></a></td><td>{{ .Title }}</td><td>{{ if .Available }}<code>{{ .Value }}</code>{{ else }}<span class="value-unavailable">{{ .Value }}</span>{{ end }}</td><td>{{ .Access }}<br><span class="helper">{{ .Persistence }}</span></td></tr>{{ end }}</tbody>
+  </table></div></section>{{ end }}
+{{ template "footer" . }}{{ end }}
+
+{{ define "shutdown-delay-edit" }}{{ template "header" . }}
+  <p><a href="/registers">← All registers</a></p>
+  <div class="page-heading"><p class="eyebrow">Purpose-specific temporary configuration</p><h1>Shutdown and reboot delay</h1><p class="lead">Allow the board enough time to distinguish a reboot from a completed shutdown before removing host power.</p></div>
+  <div class="notice notice-warning"><strong>Advanced configuration.</strong> The board uses eight task ticks per second, but its software-managed timing is not precise. Too short a delay can interrupt a reboot; a longer delay keeps the host powered for longer after shutdown.</div>
+  <form action="/registers/shutdown-delay/review" method="post" data-busy-form data-busy-label="Preparing review…">
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="expected_ticks" value="{{ .CurrentTicks }}">
+    <div class="table-wrap"><table><thead><tr><th>Current value</th><th>Proposed value</th></tr></thead><tbody><tr><td><strong>{{ .CurrentSeconds }} seconds</strong><br><span class="helper">Exact board value {{ .CurrentTicks }} ticks</span></td><td><label for="proposed-seconds">Seconds</label><input id="proposed-seconds" name="proposed_seconds" type="number" value="{{ .ProposedInputSeconds }}" min="5" max="15" step="1" required><br><span class="helper">Manufacturer-documented default: 5 seconds (40 ticks)</span></td></tr></tbody></table></div>
+    <div class="button-row"><button type="submit" data-submit-button>Review configuration</button><a class="button-secondary" href="/registers">Cancel</a></div>
+  </form>
+{{ template "footer" . }}{{ end }}
+
+{{ define "shutdown-delay-review" }}{{ template "header" . }}
+  <p><a href="/registers/shutdown-delay/edit">← Shutdown delay</a></p>
+  <div class="page-heading"><p class="eyebrow">Purpose-specific temporary configuration</p><h1>Review before applying</h1></div>
+  <div class="notice notice-warning"><strong>This changes live board behaviour.</strong> The controller will re-read the exact tick value and write nothing if it differs from the value reviewed here. Nothing will be committed to flash.</div>
+  <section class="section-grid"><article class="card"><h2>Current reviewed value</h2><p><strong>{{ .CurrentSeconds }} seconds</strong></p><p class="helper"><code>{{ .CurrentTicks }}</code> ticks</p></article><article class="card"><h2>Proposed temporary value</h2><p><strong>{{ .ProposedSeconds }} seconds</strong></p><p class="helper"><code>{{ .ProposedTicks }}</code> ticks</p></article></section>
+  <article class="card"><h2>Recovery</h2><p>Removing all input power and the battery reloads the last flash-saved configuration. This operation does not use <code>CFG_WRITE</code>.</p></article>
+  <form action="/registers/shutdown-delay/apply" method="post" data-busy-form data-busy-label="Applying and verifying delay…"><input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="expected_ticks" value="{{ .CurrentTicks }}"><input type="hidden" name="proposed_seconds" value="{{ .ProposedSeconds }}"><input type="hidden" name="review_token" value="{{ .ReviewToken }}"><div class="button-row"><button type="submit" data-submit-button>Apply temporarily</button><a class="button-secondary" href="/registers/shutdown-delay/edit">Cancel without changing</a></div></form>
+{{ template "footer" . }}{{ end }}
+
+{{ define "shutdown-delay-result" }}{{ template "header" . }}
+  <p><a href="/registers/shutdown-delay/edit">← Shutdown delay</a></p>
+  <div class="page-heading"><p class="eyebrow">Purpose-specific temporary configuration</p><h1>{{ .Heading }}</h1></div>
+  <article class="card state-card" data-state="{{ .Tone }}"><p class="state-label">{{ .Outcome }}</p><p>{{ .Summary }}</p><dl class="status-list"><div><dt>Reviewed ticks</dt><dd>{{ .ExpectedRaw }}</dd></div><div><dt>Proposed ticks</dt><dd>{{ .ProposedRaw }}</dd></div><div><dt>Fresh ticks</dt><dd>{{ .FreshRaw }}</dd></div><div><dt>Observed actual ticks</dt><dd>{{ .ActualRaw }}</dd></div><div><dt>Persistence</dt><dd>Temporary only — not committed to flash</dd></div></dl></article>
+  <div class="button-row"><a class="button-primary" href="/registers/shutdown-delay/edit">Read shutdown delay again</a><a class="button-secondary" href="/activity?type=register.change-observed">View Activity evidence</a></div>
+{{ template "footer" . }}{{ end }}
+
+{{ define "battery-threshold-edit" }}{{ template "header" . }}
+  <p><a href="/registers">← All registers</a></p>
+  <div class="page-heading"><p class="eyebrow">Advanced temporary configuration</p><h1>Battery thresholds</h1><p class="lead">Stage the complete ordered threshold set before anything is written.</p></div>
+  <div class="notice notice-warning"><strong>Advanced configuration.</strong> The required relationship is <code>VBAT_MIN &lt; VBAT_SHDN &lt; VBAT_BOOT</code>. Changes affect battery protection and boot behaviour immediately, but are not committed to flash.</div>
+  <form action="/registers/battery-thresholds/review" method="post" data-busy-form data-busy-label="Validating configuration…">
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+    <div class="table-wrap"><table><thead><tr><th>Threshold</th><th>Current reviewed value</th><th>Proposed value</th></tr></thead><tbody>
+    {{ range .Rows }}<tr><td><code>{{ .Name }}</code><br><span class="helper">{{ .Title }}</span></td><td>{{ .CurrentValue }}<br><span class="helper">Exact vendor-scaled value {{ .ExpectedValue }} mV; raw bytes are not recoverable through the CLI.</span><input type="hidden" name="expected_{{ .Key }}" value="{{ .ExpectedValue }}"></td><td><label for="proposed-{{ .Name }}">Millivolts</label><input id="proposed-{{ .Name }}" name="proposed_{{ .Key }}" type="number" value="{{ .ProposedInput }}" min="{{ .Minimum }}" max="{{ .Maximum }}" step="1" required></td></tr>{{ end }}
+    </tbody></table></div>
+    <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Review complete configuration</span></button><a class="button-secondary" href="/registers">Cancel</a></div>
+  </form>
+{{ template "footer" . }}{{ end }}
+
+{{ define "battery-threshold-review" }}{{ template "header" . }}
+  <p><a href="/registers/battery-thresholds/edit">← Battery thresholds</a></p>
+  <div class="page-heading"><p class="eyebrow">Advanced temporary configuration</p><h1>Review before applying</h1><p class="lead">The complete configuration has passed representation and ordering validation.</p></div>
+  <div class="notice notice-warning"><strong>This changes live battery protection settings.</strong> The controller will re-read all three vendor-scaled millivolt values and write nothing if any reviewed value has changed.</div>
+  <div class="table-wrap"><table><thead><tr><th>Threshold</th><th>Current reviewed value</th><th>Proposed temporary value</th></tr></thead><tbody>{{ range .Rows }}<tr><td><code>{{ .Name }}</code></td><td>{{ .CurrentValue }}</td><td>{{ .ProposedValue }}<br><span class="helper">{{ if .Changed }}Changed{{ else }}Unchanged{{ end }}</span></td></tr>{{ end }}</tbody></table></div>
+  <p><strong>Recovery:</strong> Removing all input power and the battery reloads the last flash-saved configuration.</p>
+  <form action="/registers/battery-thresholds/apply" method="post" data-busy-form data-busy-label="Applying and verifying configuration…">
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="review_token" value="{{ .ReviewToken }}">{{ range .Rows }}<input type="hidden" name="expected_{{ .Key }}" value="{{ .ExpectedValue }}"><input type="hidden" name="proposed_{{ .Key }}" value="{{ .ProposedInput }}">{{ end }}
+    <div class="button-row"><button type="submit" data-submit-button>Apply temporarily</button><a class="button-secondary" href="/registers/battery-thresholds/edit">Cancel without changing</a></div>
+  </form>
+{{ template "footer" . }}{{ end }}
+
+{{ define "battery-threshold-result" }}{{ template "header" . }}
+  <p><a href="/registers/battery-thresholds/edit">← Battery thresholds</a></p>
+  <div class="page-heading"><p class="eyebrow">Advanced temporary configuration</p><h1>{{ .Heading }}</h1></div>
+  <article class="card state-card" data-state="{{ .Tone }}"><p class="state-label">{{ .Outcome }}</p><p>{{ .Summary }}</p></article>
+  <div class="table-wrap"><table><thead><tr><th>Threshold</th><th>Reviewed value</th><th>Proposed value</th><th>Fresh value</th><th>Observed actual value</th></tr></thead><tbody>{{ range .Rows }}<tr><td><code>{{ .Name }}</code></td><td>{{ .ExpectedValue }} mV</td><td>{{ .ProposedValueInteger }} mV</td><td>{{ .CurrentValue }}{{ if ne .CurrentValue "Unknown" }} mV{{ end }}</td><td>{{ .ActualValue }}{{ if ne .ActualValue "Unknown" }} mV{{ end }}</td></tr>{{ end }}</tbody></table></div>
+  <p><strong>Persistence:</strong> Temporary only — not committed to flash.</p>
+  <div class="button-row"><a class="button-primary" href="/registers/battery-thresholds/edit">Read all thresholds again</a><a class="button-secondary" href="/activity?type=register.batch-observed">View Activity evidence</a></div>
+{{ template "footer" . }}{{ end }}
+
+{{ define "register-detail" }}{{ template "header" . }}
+  <p><a href="/registers">← All registers</a></p>
+  <div class="page-heading"><p class="eyebrow">Register detail</p><h1><code>{{ .Name }}</code></h1><p class="lead">{{ .RegisterTitle }}</p></div>
+  <section class="section-grid">
+    <article class="card state-card" data-state="{{ if .Available }}ok{{ else }}error{{ end }}"><p class="state-label">Current value</p><h2><code>{{ .Value }}</code></h2>{{ if .Failure }}<p>The read failed: {{ .Failure }}.</p>{{ end }}
+      <dl class="status-list"><div><dt>Raw value</dt><dd>{{ .RawValue }}</dd></div>{{ if .Choice }}<div><dt>Named value</dt><dd>{{ .Choice }}</dd></div>{{ end }}{{ if .InterpretedUTC }}<div><dt>Human-readable</dt><dd>{{ .InterpretedUTC }}</dd></div>{{ end }}{{ if .InterpretedLocal }}<div><dt>Controller local time</dt><dd>{{ .InterpretedLocal }}</dd></div>{{ end }}</dl>
+    </article>
+    <article class="card"><h2>Technical facts</h2><dl class="status-list"><div><dt>Address</dt><dd>{{ .Address }}</dd></div><div><dt>Width</dt><dd>{{ .Width }}</dd></div><div><dt>Access</dt><dd>{{ .Access }}</dd></div><div><dt>Storage</dt><dd>{{ .Persistence }}</dd></div><div><dt>Documented default</dt><dd>{{ .DefaultValue }}</dd></div><div><dt>Default raw value</dt><dd>{{ .DefaultRaw }}</dd></div><div><dt>Safety class</dt><dd>{{ .SafetyClass }}</dd></div><div><dt>Software owner</dt><dd>{{ .Owner }}</dd></div></dl><p class="helper">{{ .DefaultNote }}</p></article>
+  </section>
+  <section><h2>Application guidance</h2><article class="card"><h3>Purpose</h3><p>{{ .Purpose }}</p><h3>Behaviour</h3><p>{{ .Behavior }}</p>{{ if .SafetyGuidance }}<h3>Safety</h3><p>{{ .SafetyGuidance }}</p>{{ end }}</article></section>
+  <section><h2>Temporary change</h2><article class="card">
+    {{ if .Editable }}
+      <p>Choose a reviewed value to stage. This does not write immediately; the next page shows a separate confirmation.</p>
+      <div class="notice notice-warning"><strong>Not saved to flash.</strong> Applying a temporary value changes the running board only. Removing all input power and the battery reloads the last flash-saved configuration.</div>
+      <form action="/registers/{{ .Name }}/review" method="post" data-busy-form data-busy-label="Preparing review…">
+        <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="expected_raw" value="{{ .ExpectedRaw }}">
+        <label for="proposed-value">Proposed value</label><select id="proposed-value" name="proposed_value" required>{{ range .EditChoices }}<option value="{{ .Value }}">{{ .Label }}</option>{{ end }}</select>
+        <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Review temporary change</span></button></div>
+      </form>
+    {{ else }}
+      <p><strong>Not editable in the generic workflow.</strong> {{ .EditReason }}</p>
+    {{ end }}
+  </article></section>
+  <section><h2>Manufacturer reference</h2><article class="card"><p>{{ .Source }}</p><p class="helper">This application uses original summary text above. Consult the attributed manufacturer document for the authoritative register description.</p></article></section>
+{{ template "footer" . }}{{ end }}
+
+{{ define "register-review" }}{{ template "header" . }}
+  <p><a href="/registers/{{ .Name }}">← {{ .Name }}</a></p>
+  <div class="page-heading"><p class="eyebrow">Temporary register change</p><h1>Review before applying</h1><p class="lead"><code>{{ .Name }}</code> — {{ .RegisterTitle }}</p></div>
+  <div class="notice notice-warning"><strong>This changes live board state.</strong> It does not commit anything to flash. The controller will re-read the register immediately before writing and stop if it has changed.</div>
+  <section class="section-grid">
+    <article class="card"><h2>Current value reviewed</h2><p><code>{{ .CurrentValue }}</code></p><p class="helper">Raw value {{ .CurrentRaw }}</p></article>
+    <article class="card"><h2>Proposed temporary value</h2><p><code>{{ .ProposedValue }}</code></p><p class="helper">Raw value {{ .ProposedRaw }}</p></article>
+  </section>
+  <article class="card"><h2>Effect</h2><p>{{ .Behavior }}</p>{{ if .SafetyGuidance }}<p><strong>Safety guidance:</strong> {{ .SafetyGuidance }}</p>{{ end }}<p><strong>Recovery:</strong> Removing all input power and the battery reloads the last flash-saved configuration.</p></article>
+  <form action="/registers/{{ .Name }}/apply" method="post" data-busy-form data-busy-label="Applying and verifying…">
+    <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="expected_raw" value="{{ .CurrentRaw }}"><input type="hidden" name="proposed_value" value="{{ .ProposedEngineering }}"><input type="hidden" name="review_token" value="{{ .ReviewToken }}">
+    <div class="button-row"><button type="submit" data-submit-button>Apply temporarily</button><a class="button-secondary" href="/registers/{{ .Name }}">Cancel without changing</a></div>
+  </form>
+{{ template "footer" . }}{{ end }}
+
+{{ define "register-result" }}{{ template "header" . }}
+  <p><a href="/registers/{{ .Name }}">← {{ .Name }}</a></p>
+  <div class="page-heading"><p class="eyebrow">Temporary register change</p><h1>{{ .Heading }}</h1></div>
+  <article class="card state-card" data-state="{{ .Tone }}"><p class="state-label">{{ .Outcome }}</p><p>{{ .Summary }}</p><dl class="status-list"><div><dt>Reviewed raw value</dt><dd>{{ .ExpectedRaw }}</dd></div><div><dt>Proposed raw value</dt><dd>{{ .ProposedRaw }}</dd></div><div><dt>Fresh raw value</dt><dd>{{ .FreshRaw }}</dd></div><div><dt>Observed actual raw value</dt><dd>{{ .ActualRaw }}</dd></div><div><dt>Persistence</dt><dd>Temporary only — not committed to flash</dd></div></dl></article>
+  <div class="button-row"><a class="button-primary" href="/registers/{{ .Name }}">Read register again</a><a class="button-secondary" href="/activity?type=register.change-observed">View Activity evidence</a></div>
+{{ template "footer" . }}{{ end }}

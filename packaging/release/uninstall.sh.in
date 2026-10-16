@@ -1,0 +1,459 @@
+#!/bin/sh
+
+set -eu
+umask 077
+export LC_ALL=C
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+
+PRODUCT='lifepowerctl'
+REPOSITORY='sinoia/lifepowerctl'
+RELEASE_VERSION='@RELEASE_VERSION@'
+RELEASE_COMMIT='@RELEASE_COMMIT@'
+
+SERVICE_USER='lifepowerctl'
+SERVICE_GROUP='lifepowerctl'
+JOBS_GROUP='lifepowerctl-jobs'
+INSTALL_ROOT='/usr/lib/lifepowerctl'
+CONFIG_ROOT='/etc/lifepowerctl'
+STATE_ROOT='/var/lib/lifepowerctl'
+JOBS_ROOT='/var/lib/lifepowerctl-jobs'
+METADATA_ROOT='/var/lib/lifepowerctl-installer'
+RUNTIME_ROOT='/run/lifepowerctl'
+POWER_RUNTIME_ROOT='/run/lifepowerctl-power'
+SYSTEMD_ROOT='/etc/systemd/system'
+TMPFILES_POLICY='/etc/tmpfiles.d/lifepowerctl.conf'
+SUDOERS_POLICY='/etc/sudoers.d/lifepowerctl'
+INSTALLED_RECORD="$METADATA_ROOT/installed"
+PRESERVED_RECORD="$METADATA_ROOT/preserved"
+TRANSACTION_FILE="$METADATA_ROOT/uninstall-transaction"
+RECOVERY_ROOT="$METADATA_ROOT/uninstall-previous"
+
+usage() {
+    printf '%s\n' \
+        "LifePower Control uninstaller ${RELEASE_VERSION}" '' 'Usage:' \
+        '  sudo sh /usr/lib/lifepowerctl/uninstall.sh' \
+        '  sudo sh /usr/lib/lifepowerctl/uninstall.sh --purge-data' \
+        '  sudo sh /var/lib/lifepowerctl-installer/uninstall-previous/uninstall.sh --recover' \
+        '  sh ./uninstall.sh --release-info' '  sh ./uninstall.sh --help' '' \
+        'Ordinary uninstall removes package machinery and preserves:' \
+        "  $CONFIG_ROOT" "  $STATE_ROOT" "  $JOBS_ROOT" '' \
+        'It also retains the application identities needed to own that data.' \
+        '--purge-data is a separate destructive operation requiring a terminal' \
+        'and an exact typed confirmation. It has no non-interactive shortcut.' \
+        '--recover restores an interrupted uninstall from its closed root-only backup.'
+}
+
+release_info() {
+    printf '%s\n' 'format=1' "product=${PRODUCT}" "repository=${REPOSITORY}" \
+        "version=${RELEASE_VERSION}" "commit=${RELEASE_COMMIT}"
+}
+
+note() { printf '%s\n' "$*"; }
+fail() { printf '%s\n' "uninstall failed: $*" >&2; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+record_value() {
+    record_file=$1
+    record_key=$2
+    awk -F= -v key="$record_key" '$1 == key { count++; value=substr($0, length(key)+2) } END { if (count == 1) print value }' "$record_file"
+}
+
+require_line_once() {
+    line_source=$1
+    expected_line=$2
+    description=$3
+    matches=$(printf '%s\n' "$line_source" | grep -Fxc -- "$expected_line" || :)
+    [ "$matches" -eq 1 ] || fail "$description must contain exactly one line: $expected_line"
+}
+
+require_owned_file() {
+    [ -f "$1" ] && [ ! -L "$1" ] || fail "installed file is missing or unsafe: $1"
+    [ "$(stat -c '%U:%G:%a' "$1")" = "$2:$3:$4" ] || fail "installed file ownership or mode is unexpected: $1"
+}
+
+require_owned_directory() {
+    [ -d "$1" ] && [ ! -L "$1" ] || fail "installed directory is missing or unsafe: $1"
+    [ "$(stat -c '%U:%G:%a' "$1")" = "$2:$3:$4" ] || fail "installed directory ownership or mode is unexpected: $1"
+}
+
+require_machine_metadata_shape() {
+    machine_metadata=$1
+    description=$2
+    [ "$(printf '%s\n' "$machine_metadata" | wc -l)" -eq 10 ] || fail "$description has unexpected fields"
+    runtime_fields=$(printf '%s\n' "$machine_metadata" | grep -Ec '^go=go[0-9][0-9A-Za-z.+-]{0,62}$' || :)
+    [ "$runtime_fields" -eq 1 ] || fail "$description has an invalid or duplicated Go runtime field"
+}
+
+validate_installed_record() {
+    [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'installer metadata directory is missing or unsafe'
+    [ "$(stat -c '%U:%G:%a' "$METADATA_ROOT")" = root:root:700 ] || fail 'installer metadata ownership or mode is unexpected'
+    [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed ] || fail 'installer metadata contains interrupted or foreign state; use the matching recovery procedure'
+    require_owned_file "$INSTALLED_RECORD" root root 600
+    [ "$(wc -l <"$INSTALLED_RECORD")" -eq 5 ] || fail 'installed record has unexpected fields'
+    [ "$(record_value "$INSTALLED_RECORD" format)" = 1 ] || fail 'installed record format is unsupported'
+    installed_version=$(record_value "$INSTALLED_RECORD" version)
+    installed_commit=$(record_value "$INSTALLED_RECORD" commit)
+    job_user=$(record_value "$INSTALLED_RECORD" job_user)
+    web_lifecycle=$(record_value "$INSTALLED_RECORD" web)
+    [ "$installed_version" = "$RELEASE_VERSION" ] && [ "$installed_commit" = "$RELEASE_COMMIT" ] || fail 'this uninstaller does not match the installed release'
+    printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'installed job user is unsafe'
+    case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'installed web lifecycle is invalid' ;; esac
+}
+
+validate_accounts() {
+    service_group_line=$(getent group "$SERVICE_GROUP") || fail "installed group is missing: $SERVICE_GROUP"
+    jobs_group_line=$(getent group "$JOBS_GROUP") || fail "installed group is missing: $JOBS_GROUP"
+    service_user_line=$(getent passwd "$SERVICE_USER") || fail "installed account is missing: $SERVICE_USER"
+    job_user_line=$(getent passwd "$job_user") || fail "installed job user is missing: $job_user"
+    service_gid=$(printf '%s\n' "$service_group_line" | cut -d: -f3)
+    service_members=$(printf '%s\n' "$service_group_line" | cut -d: -f4)
+    [ -z "$service_members" ] || fail 'installed service group has an unexpected supplementary member'
+    other_primary=$(getent passwd | awk -F: -v gid="$service_gid" '$4 == gid && $1 != "lifepowerctl" { print $1; exit }')
+    [ -z "$other_primary" ] || fail "installed service group is used by another primary account: $other_primary"
+    expected_service=$(printf '%s\n' "$service_user_line" | awk -F: -v gid="$service_gid" -v home="$STATE_ROOT" \
+        '$1 == "lifepowerctl" && $3 > 0 && $3 < 1000 && $4 == gid && $6 == home && $7 == "/usr/sbin/nologin" { print "yes" }')
+    [ "$expected_service" = yes ] || fail 'installed service-account definition is incompatible'
+
+    jobs_gid=$(printf '%s\n' "$jobs_group_line" | cut -d: -f3)
+    jobs_members=$(printf '%s\n' "$jobs_group_line" | cut -d: -f4)
+    jobs_primary=$(getent passwd | awk -F: -v gid="$jobs_gid" '$4 == gid { print $1; exit }')
+    [ -z "$jobs_primary" ] || fail "installed jobs group is used as a primary group by: $jobs_primary"
+    for required_member in "$SERVICE_USER" "$job_user"
+    do case ",$jobs_members," in *",$required_member,"*) ;; *) fail "installed jobs group is missing member: $required_member" ;; esac; done
+    old_ifs=$IFS; IFS=,
+    for member in $jobs_members
+    do [ "$member" = "$SERVICE_USER" ] || [ "$member" = "$job_user" ] || fail "installed jobs group has unexpected member: $member"; done
+    IFS=$old_ifs
+    service_groups=$(id -nG "$SERVICE_USER")
+    for required_group in "$SERVICE_GROUP" "$JOBS_GROUP" i2c
+    do case " $service_groups " in *" $required_group "*) ;; *) fail "installed service account is missing group: $required_group" ;; esac; done
+    for service_supplementary in $service_groups
+    do
+        [ "$service_supplementary" = "$SERVICE_GROUP" ] || [ "$service_supplementary" = "$JOBS_GROUP" ] || \
+            [ "$service_supplementary" = i2c ] || fail "installed service account has unexpected group: $service_supplementary"
+    done
+    job_gid=$(printf '%s\n' "$job_user_line" | cut -d: -f4)
+    job_group=$(getent group "$job_gid" | cut -d: -f1)
+    [ -n "$job_group" ] || fail 'installed job-user primary group is unavailable'
+}
+
+expected_manifest() {
+    printf '%s\n' \
+        'format=1' \
+        'file|remove|/usr/lib/lifepowerctl/lifepowerctl|root|root|0755' \
+        'file|remove|/usr/lib/lifepowerctl/uninstall.sh|root|root|0755' \
+        'file|remove|/usr/lib/lifepowerctl/install-manifest|root|root|0644' \
+        'file|remove|/etc/systemd/system/lifepowerctl-controller.service|root|root|0644' \
+        'file|remove|/etc/systemd/system/lifepowerctl-job-runner.service|root|root|0644' \
+        'file|remove|/etc/systemd/system/lifepowerctl-poweroff.service|root|root|0644' \
+        'file|remove|/etc/systemd/system/lifepowerctl-poweroff.path|root|root|0644' \
+        'file|remove|/etc/systemd/system/lifepowerctl.service|root|root|0644' \
+        'file|remove|/etc/tmpfiles.d/lifepowerctl.conf|root|root|0644' \
+        'file|remove|/etc/sudoers.d/lifepowerctl|root|root|0440' \
+        "file|preserve|/etc/lifepowerctl/config.json|root|$SERVICE_GROUP|0640" \
+        'directory|remove-if-empty|/usr/lib/lifepowerctl|root|root|0755' \
+        "directory|preserve|/etc/lifepowerctl|root|$SERVICE_GROUP|0750" \
+        "directory|preserve|/var/lib/lifepowerctl|$SERVICE_USER|$SERVICE_GROUP|0700" \
+        "directory|preserve|/var/lib/lifepowerctl/activity|$SERVICE_USER|$SERVICE_GROUP|0700" \
+        "directory|preserve|/var/lib/lifepowerctl-jobs|$job_user|$JOBS_GROUP|2750" \
+        "directory|preserve|/var/lib/lifepowerctl-jobs/output|$job_user|$JOBS_GROUP|2750" \
+        "directory|runtime|/run/lifepowerctl|$job_user|$JOBS_GROUP|2770" \
+        "directory|runtime|/run/lifepowerctl-power|root|$SERVICE_GROUP|0730" \
+        'directory|metadata|/var/lib/lifepowerctl-installer|root|root|0700'
+}
+
+validate_layout() {
+    require_owned_directory "$INSTALL_ROOT" root root 755
+    require_owned_directory "$CONFIG_ROOT" root "$SERVICE_GROUP" 750
+    require_owned_directory "$STATE_ROOT" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$STATE_ROOT/activity" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$JOBS_ROOT" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$JOBS_ROOT/output" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$RUNTIME_ROOT" "$job_user" "$JOBS_GROUP" 2770
+    require_owned_directory "$POWER_RUNTIME_ROOT" root "$SERVICE_GROUP" 730
+    require_owned_file "$INSTALL_ROOT/lifepowerctl" root root 755
+    require_owned_file "$INSTALL_ROOT/uninstall.sh" root root 755
+    require_owned_file "$INSTALL_ROOT/install-manifest" root root 644
+    require_owned_file "$CONFIG_ROOT/config.json" root "$SERVICE_GROUP" 640
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl.service" root root 644
+    require_owned_file "$TMPFILES_POLICY" root root 644
+    require_owned_file "$SUDOERS_POLICY" root root 440
+    [ "$(cat "$INSTALL_ROOT/install-manifest")" = "$(expected_manifest)" ] || fail 'installed owned-file manifest is not exact'
+    visudo -c -f "$SUDOERS_POLICY" >/dev/null || fail 'installed sudo policy is invalid'
+}
+
+check_web_health() {
+    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null http://127.0.0.1:8080/healthz
+    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null http://127.0.0.1:8080/healthz
+    fi
+}
+
+validate_running_state() {
+    machine_info=$(timeout 10 "$INSTALL_ROOT/lifepowerctl" version --machine) || fail 'installed executable cannot report machine metadata'
+    require_machine_metadata_shape "$machine_info" 'installed executable metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "version=$installed_version" "commit=$installed_commit" \
+        'source_state=clean' 'target_os=linux' 'target_arch=arm64'
+    do require_line_once "$machine_info" "$expected" 'installed executable metadata'; done
+    current_status=$(timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json") || fail 'installed services cannot report bounded local status'
+    for expected in 'format=1' 'product=lifepowerctl' "running_version=$installed_version" "running_commit=$installed_commit" \
+        'controller=ready' 'runner=ready' 'board=ready' 'lifecycle=inactive' 'jobs=idle' 'maintenance=safe'
+    do require_line_once "$current_status" "$expected" 'installed service status'; done
+    automation=$(printf '%s\n' "$current_status" | sed -n 's/^automation=//p')
+    case "$automation" in absent|disabled) ;; *) fail 'automation must be absent or disabled before uninstall' ;; esac
+    state_revision=$(printf '%s\n' "$current_status" | sed -n 's/^state_revision=//p')
+    state_schema=$(printf '%s\n' "$current_status" | sed -n 's/^state_schema=//p')
+    case "$state_revision" in ''|*[!0-9]*) fail 'installed state revision is invalid' ;; esac
+    if [ -z "$state_schema" ]; then [ "$state_revision" -eq 0 ] || fail 'legacy status cannot prove its durable schema'; state_schema=0; fi
+    case "$state_schema" in *[!0-9]*) fail 'installed durable schema is invalid' ;; esac
+    if [ "$state_revision" -eq 0 ]; then [ "$state_schema" -eq 0 ] || fail 'empty state revision contradicts its durable schema'; fi
+    [ "$(systemctl is-enabled lifepowerctl-controller.service)" = enabled ] || fail 'installed controller service is not enabled'
+    [ "$(systemctl is-enabled lifepowerctl-job-runner.service)" = enabled ] || fail 'installed job runner service is not enabled'
+    systemctl is-active --quiet lifepowerctl-controller.service || fail 'installed controller service is not active'
+    systemctl is-active --quiet lifepowerctl-job-runner.service || fail 'installed job runner service is not active'
+    current_web_active=$(systemctl is-active lifepowerctl.service 2>/dev/null || :)
+    current_web_enabled=$(systemctl is-enabled lifepowerctl.service 2>/dev/null || :)
+    case "$current_web_active" in active|inactive) ;; *) fail "installed web activity is unsafe: $current_web_active" ;; esac
+    case "$web_lifecycle:$current_web_enabled" in enabled:enabled|on-demand:disabled) ;; *) fail 'installed web lifecycle is inconsistent' ;; esac
+    if [ "$web_lifecycle" = enabled ]; then [ "$current_web_active" = active ] || fail 'enabled web service is not active'; fi
+    if [ "$current_web_active" = active ]; then check_web_health || fail 'installed web health endpoint is unavailable'; fi
+}
+
+preflight() {
+    [ "$(id -u)" -eq 0 ] || fail 'root is required'
+    for tool in awk cat cut find getent grep id install mountpoint mv rm rmdir runuser sed sort stat systemctl systemd-tmpfiles timeout userdel groupdel gpasswd visudo wc
+    do have "$tool" || fail "required tool is missing: $tool"; done
+    if ! have wget && ! have curl; then fail 'wget or curl is required'; fi
+    validate_installed_record
+    validate_accounts
+    validate_layout
+    validate_running_state
+}
+
+write_transaction() {
+    transaction_phase=$1
+    printf '%s\n' 'format=1' 'operation=uninstall' "version=$installed_version" "commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" "web_active=$current_web_active" "phase=$transaction_phase" >"$TRANSACTION_FILE.new"
+    chmod 0600 "$TRANSACTION_FILE.new"
+    mv -f -- "$TRANSACTION_FILE.new" "$TRANSACTION_FILE"
+}
+
+validate_recovery_backup() {
+    [ -d "$RECOVERY_ROOT" ] && [ ! -L "$RECOVERY_ROOT" ] || fail 'uninstall recovery directory is missing or unsafe'
+    [ "$(stat -c '%U:%G:%a' "$RECOVERY_ROOT")" = root:root:700 ] || fail 'uninstall recovery directory ownership or mode is unsafe'
+    backup_names=$(find "$RECOVERY_ROOT" -mindepth 1 -maxdepth 1 -type f -printf '%f\n' | sort)
+    expected_names=$(printf '%s\n' controller.service install-manifest installed job-runner.service lifepowerctl poweroff.path poweroff.service sudoers tmpfiles.conf uninstall.sh web.service | sort)
+    [ "$backup_names" = "$expected_names" ] || fail 'uninstall recovery directory has unexpected entries'
+    require_owned_file "$RECOVERY_ROOT/lifepowerctl" root root 755
+    require_owned_file "$RECOVERY_ROOT/uninstall.sh" root root 755
+    require_owned_file "$RECOVERY_ROOT/install-manifest" root root 644
+    require_owned_file "$RECOVERY_ROOT/controller.service" root root 644
+    require_owned_file "$RECOVERY_ROOT/job-runner.service" root root 644
+    require_owned_file "$RECOVERY_ROOT/poweroff.service" root root 644
+    require_owned_file "$RECOVERY_ROOT/poweroff.path" root root 644
+    require_owned_file "$RECOVERY_ROOT/web.service" root root 644
+    require_owned_file "$RECOVERY_ROOT/tmpfiles.conf" root root 644
+    require_owned_file "$RECOVERY_ROOT/sudoers" root root 440
+    require_owned_file "$RECOVERY_ROOT/installed" root root 600
+    [ "$(cat "$RECOVERY_ROOT/install-manifest")" = "$(expected_manifest)" ] || fail 'saved owned-file manifest is not exact'
+}
+
+prepare_recovery() {
+    [ ! -e "$RECOVERY_ROOT" ] && [ ! -L "$RECOVERY_ROOT" ] || fail 'uninstall recovery directory already exists'
+    mkdir -m 0700 "$RECOVERY_ROOT"
+    install -o root -g root -m 0755 "$INSTALL_ROOT/lifepowerctl" "$RECOVERY_ROOT/lifepowerctl"
+    install -o root -g root -m 0755 "$INSTALL_ROOT/uninstall.sh" "$RECOVERY_ROOT/uninstall.sh"
+    install -o root -g root -m 0644 "$INSTALL_ROOT/install-manifest" "$RECOVERY_ROOT/install-manifest"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$RECOVERY_ROOT/controller.service"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$RECOVERY_ROOT/job-runner.service"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$RECOVERY_ROOT/poweroff.service"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$RECOVERY_ROOT/poweroff.path"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl.service" "$RECOVERY_ROOT/web.service"
+    install -o root -g root -m 0644 "$TMPFILES_POLICY" "$RECOVERY_ROOT/tmpfiles.conf"
+    install -o root -g root -m 0440 "$SUDOERS_POLICY" "$RECOVERY_ROOT/sudoers"
+    install -o root -g root -m 0600 "$INSTALLED_RECORD" "$RECOVERY_ROOT/installed"
+    validate_recovery_backup
+}
+
+restore_file() { install -o root -g root -m "$3" "$1" "$2"; }
+
+restore_uninstall() {
+    trap - EXIT HUP INT TERM
+    note "Restoring LifePower Control $installed_version after an incomplete uninstall."
+    install -d -o root -g root -m 0755 "$INSTALL_ROOT"
+    restore_file "$RECOVERY_ROOT/lifepowerctl" "$INSTALL_ROOT/lifepowerctl" 0755
+    restore_file "$RECOVERY_ROOT/uninstall.sh" "$INSTALL_ROOT/uninstall.sh" 0755
+    restore_file "$RECOVERY_ROOT/install-manifest" "$INSTALL_ROOT/install-manifest" 0644
+    restore_file "$RECOVERY_ROOT/controller.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" 0644
+    restore_file "$RECOVERY_ROOT/job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" 0644
+    restore_file "$RECOVERY_ROOT/poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" 0644
+    restore_file "$RECOVERY_ROOT/poweroff.path" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" 0644
+    restore_file "$RECOVERY_ROOT/web.service" "$SYSTEMD_ROOT/lifepowerctl.service" 0644
+    restore_file "$RECOVERY_ROOT/tmpfiles.conf" "$TMPFILES_POLICY" 0644
+    restore_file "$RECOVERY_ROOT/sudoers" "$SUDOERS_POLICY" 0440
+    restore_file "$RECOVERY_ROOT/installed" "$INSTALLED_RECORD" 0600
+    rm -f -- "$PRESERVED_RECORD" "$PRESERVED_RECORD.new"
+    systemctl daemon-reload
+    systemd-tmpfiles --create "$TMPFILES_POLICY"
+    systemctl enable lifepowerctl-job-runner.service lifepowerctl-controller.service lifepowerctl-poweroff.path >/dev/null
+    if [ "$web_lifecycle" = enabled ]; then systemctl enable lifepowerctl.service >/dev/null; else systemctl disable lifepowerctl.service >/dev/null 2>&1 || :; fi
+    systemctl start lifepowerctl-job-runner.service
+    systemctl start lifepowerctl-controller.service
+    systemctl start lifepowerctl-poweroff.path
+    if [ "$current_web_active" = active ]; then systemctl start lifepowerctl.service; else systemctl stop lifepowerctl.service >/dev/null 2>&1 || :; fi
+    validate_running_state
+    rm -f -- "$TRANSACTION_FILE" "$TRANSACTION_FILE.new"
+    rm -rf -- "$RECOVERY_ROOT"
+    rollback_authorized=0
+    note "LifePower Control $installed_version was restored successfully."
+}
+
+rollback_on_exit() {
+    status=$?
+    trap - EXIT HUP INT TERM
+    if [ "$rollback_authorized" -eq 1 ]; then
+        if restore_uninstall; then :; else note 'Automatic uninstall restoration was incomplete; use the saved recovery uninstaller with --recover.' >&2; fi
+    fi
+    exit "$status"
+}
+
+failure_point() { :; }
+
+write_preserved_record() {
+    printf '%s\n' 'format=1' "version=$installed_version" "commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" "state_schema=$state_schema" >"$PRESERVED_RECORD.new"
+    chmod 0600 "$PRESERVED_RECORD.new"
+}
+
+remove_package_machinery() {
+    rm -f -- "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl.service" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY" "$INSTALL_ROOT/lifepowerctl" \
+        "$INSTALL_ROOT/uninstall.sh" "$INSTALL_ROOT/install-manifest"
+    rmdir "$INSTALL_ROOT"
+}
+
+uninstall_preserving_data() {
+    prepare_recovery
+    write_preserved_record
+    write_transaction prepared
+    rollback_authorized=1
+    trap rollback_on_exit EXIT HUP INT TERM
+    failure_point prepared
+    systemctl stop lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path
+    systemctl disable lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path >/dev/null
+    for unit in lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path
+    do
+        active_state=$(systemctl is-active "$unit" 2>/dev/null || :)
+        case "$active_state" in inactive|failed) ;; *) fail "service did not stop safely: $unit" ;; esac
+        enabled_state=$(systemctl is-enabled "$unit" 2>/dev/null || :)
+        case "$enabled_state" in disabled|static|indirect) ;; *) fail "service did not disable safely: $unit" ;; esac
+    done
+    write_transaction stopped
+    failure_point stopped
+    rmdir "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT"
+    remove_package_machinery
+    write_transaction removed
+    failure_point removed
+    systemctl daemon-reload
+    write_transaction reloaded
+    failure_point reloaded
+    rm -f -- "$INSTALLED_RECORD"
+    mv -- "$PRESERVED_RECORD.new" "$PRESERVED_RECORD"
+    write_transaction committed
+    failure_point committed
+    rm -f -- "$TRANSACTION_FILE"
+    rm -rf -- "$RECOVERY_ROOT"
+    rollback_authorized=0
+    uninstall_complete=1
+    trap - EXIT HUP INT TERM
+}
+
+load_recovery() {
+    [ "$(id -u)" -eq 0 ] || fail 'root is required for uninstall recovery'
+    [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'no safe interrupted-uninstall transaction was found'
+    [ "$(stat -c '%U:%G:%a' "$TRANSACTION_FILE")" = root:root:600 ] || fail 'uninstall transaction ownership or mode is unsafe'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 8 ] || fail 'uninstall transaction has unexpected fields'
+    [ "$(record_value "$TRANSACTION_FILE" format)" = 1 ] && [ "$(record_value "$TRANSACTION_FILE" operation)" = uninstall ] || fail 'uninstall transaction is unsupported'
+    installed_version=$(record_value "$TRANSACTION_FILE" version)
+    installed_commit=$(record_value "$TRANSACTION_FILE" commit)
+    job_user=$(record_value "$TRANSACTION_FILE" job_user)
+    web_lifecycle=$(record_value "$TRANSACTION_FILE" web)
+    current_web_active=$(record_value "$TRANSACTION_FILE" web_active)
+    [ "$installed_version" = "$RELEASE_VERSION" ] && [ "$installed_commit" = "$RELEASE_COMMIT" ] || fail 'recovery uninstaller does not match the interrupted release'
+    case "$web_lifecycle:$current_web_active" in enabled:active|on-demand:active|on-demand:inactive) ;; *) fail 'uninstall recovery service state is invalid' ;; esac
+    validate_accounts
+    validate_recovery_backup
+    restore_uninstall
+}
+
+interactive_input() { [ -t 0 ] && [ -t 1 ]; }
+
+validate_purge_paths() {
+    for path in "$CONFIG_ROOT" "$STATE_ROOT" "$JOBS_ROOT"
+    do
+        [ -d "$path" ] && [ ! -L "$path" ] || fail "purge refused missing, non-directory, or symlinked path: $path"
+        [ -z "$(find "$path" -xdev -type d -exec mountpoint -q {} \; -print -quit)" ] || fail "purge refused a mounted directory at or below: $path"
+        [ -z "$(find "$path" -xdev -type l -print -quit)" ] || fail "purge refused a symlink below: $path"
+        [ -z "$(find "$path" -xdev ! -type d ! -type f -print -quit)" ] || fail "purge refused a non-file entry below: $path"
+    done
+}
+
+confirm_purge() {
+    interactive_input || fail '--purge-data requires an interactive terminal'
+    purge_confirmation="PURGE $CONFIG_ROOT $STATE_ROOT $JOBS_ROOT"
+    printf '%s\n' 'This permanently deletes exactly:' "  $CONFIG_ROOT" "  $STATE_ROOT" "  $JOBS_ROOT" \
+        'It then removes the lifepowerctl service account and package-created groups.' \
+        "Type exactly: $purge_confirmation"
+    IFS= read -r reply
+    [ "$reply" = "$purge_confirmation" ] || fail 'purge confirmation did not match; no changes were made'
+}
+
+purge_preserved_data() {
+    validate_purge_paths
+    rm -rf -- "$CONFIG_ROOT" "$STATE_ROOT" "$JOBS_ROOT"
+    gpasswd -d "$job_user" "$JOBS_GROUP" >/dev/null
+    userdel "$SERVICE_USER"
+    groupdel "$JOBS_GROUP"
+    groupdel "$SERVICE_GROUP"
+    rm -f -- "$PRESERVED_RECORD"
+    rmdir "$METADATA_ROOT"
+    note 'Preserved LifePower Control data and unused application identities were purged.'
+}
+
+main() {
+    case "${1-}" in
+        --help|-h) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; usage ;;
+        --release-info) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; release_info ;;
+        --recover) [ "$#" -eq 1 ] || { usage >&2; exit 2; }; load_recovery ;;
+        '')
+            [ "$#" -eq 0 ] || { usage >&2; exit 2; }
+            preflight
+            note "Uninstalling LifePower Control $installed_version while preserving application data..."
+            uninstall_preserving_data
+            note 'LifePower Control package machinery was removed.'
+            note 'Preserved paths:'
+            note "  $CONFIG_ROOT"; note "  $STATE_ROOT"; note "  $JOBS_ROOT"
+            note 'Application identities were retained because they still own preserved data.'
+            ;;
+        --purge-data)
+            [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+            preflight
+            validate_purge_paths
+            confirm_purge
+            uninstall_preserving_data
+            purge_preserved_data
+            ;;
+        *) usage >&2; exit 2 ;;
+    esac
+}
+
+rollback_authorized=0
+uninstall_complete=0
+installed_version=''; installed_commit=''; job_user=''; web_lifecycle=''; current_web_active=''; state_schema=''
+
+main "$@"

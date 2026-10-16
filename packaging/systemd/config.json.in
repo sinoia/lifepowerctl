@@ -1,0 +1,16 @@
+{
+  "listen_address": "127.0.0.1:8080",
+  "state_directory": "/var/lib/lifepowerctl",
+  "activity_directory": "/var/lib/lifepowerctl/activity",
+  "external_origin": "http://127.0.0.1:8080",
+  "acknowledge_non_loopback": false,
+  "job_identity": {
+    "user": "@JOB_USER@",
+    "uid": @JOB_UID@,
+    "home": "@JOB_HOME@",
+    "path": "/usr/local/bin:/usr/bin:/bin"
+  },
+  "runner_socket": "/run/lifepowerctl/jobs.sock",
+  "controller_socket": "/run/lifepowerctl/controller.sock",
+  "job_output_directory": "/var/lib/lifepowerctl-jobs/output"
+}

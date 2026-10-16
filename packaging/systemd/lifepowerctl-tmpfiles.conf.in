@@ -1,0 +1,11 @@
+# The setgid runtime directory gives the runner-created socket the shared jobs
+# group while retaining the selected user's normal primary group.
+d /run/lifepowerctl 2770 @JOB_USER@ lifepowerctl-jobs -
+# The controller may create only the fixed poweroff admission filename here.
+# The selected job user and jobs group have no access.
+d /run/lifepowerctl-power 0730 root lifepowerctl -
+
+# The selected user writes runner metadata and output; the controller receives
+# group read/traverse access only through lifepowerctl-jobs.
+d /var/lib/lifepowerctl-jobs 2750 @JOB_USER@ lifepowerctl-jobs -
+d /var/lib/lifepowerctl-jobs/output 2750 @JOB_USER@ lifepowerctl-jobs -

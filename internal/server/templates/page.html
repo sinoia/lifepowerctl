@@ -1,0 +1,82 @@
+{{ define "page" }}{{ template "header" . }}
+  <div class="page-heading">
+    <p class="eyebrow">Appliance controller</p>
+    <h1>System overview</h1>
+    <p class="lead">Live compatibility and service status for this LifePower Control installation.</p>
+  </div>
+
+  <div class="notice" role="status">
+    <strong>High-impact actions are narrowly controlled.</strong>
+    Register changes require review and read-back. Automatic duty cycling requires a fresh board-clock review, verified wake programming, and explicit shutdown confirmation.
+  </div>
+
+  <section aria-labelledby="status-heading">
+    <h2 id="status-heading">Current status</h2>
+    <div class="section-grid">
+      <article class="card state-card" data-state="{{ .BoardTone }}">
+        <p class="state-label">{{ .BoardLabel }}</p>
+        <h3>Board compatibility</h3>
+        <p>{{ .BoardSummary }}</p>
+        {{ if .FailureGuidance }}<p class="helper">{{ .FailureGuidance }}</p>{{ end }}
+        <dl class="status-list">
+          <div><dt>Register set</dt><dd>{{ .RegisterSet }}</dd></div>
+          <div><dt>Last check</dt><dd>{{ .CheckedAt }}</dd></div>
+          <div><dt>Last success</dt><dd>{{ .LastSuccess }}</dd></div>
+        </dl>
+        <form action="/" method="get" data-busy-form data-busy-label="Checking board…">
+          <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Refresh status</span></button></div>
+        </form>
+      </article>
+
+      <article class="card state-card" data-state="ok">
+        <p class="state-label">Ready</p>
+        <h3>Controller service</h3>
+        <dl class="status-list">
+          <div><dt>Web access</dt><dd>Authenticated</dd></div>
+          <div><dt>Operating mode</dt><dd>Controller-owned changes</dd></div>
+          <div><dt>Health</dt><dd>Live</dd></div>
+        </dl>
+      </article>
+
+      <article class="card state-card" data-state="ok">
+        <p class="state-label">Host system</p>
+        <h3>Device context</h3>
+        <p>Read-only host information for identifying and assessing this Pi.</p>
+        <dl class="status-list">
+          <div><dt>Hostname</dt><dd><code>{{ hostName }}</code></dd></div>
+          <div><dt>Uptime</dt><dd>{{ .Uptime }}</dd></div>
+        </dl>
+      </article>
+
+      <article class="card state-card" data-state="ok">
+        <p class="state-label">Guarded</p>
+        <h3>Operational capabilities</h3>
+        <p>Available mutations use purpose-specific validation, durable evidence, and restricted privilege boundaries.</p>
+        <dl class="status-list">
+          <div><dt>Register writes</dt><dd>Reviewed temporary changes</dd></div>
+          <div><dt>Jobs and schedules</dt><dd>Available</dd></div>
+          <div><dt>Power actions</dt><dd>Verified duty cycle only</dd></div>
+          <div><dt>Flash commits</dt><dd>Unavailable</dd></div>
+        </dl>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="technical-heading">
+    <h2 id="technical-heading">Technical detail</h2>
+    <details class="card">
+      <summary>Show compatibility evidence</summary>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Field</th><th>Value</th><th>Meaning</th></tr></thead>
+          <tbody>
+            <tr><td>Detection register</td><td><code>I2C_REG_VER</code></td><td>Register-set compatibility only</td></tr>
+            <tr><td>Detected value</td><td><code>{{ .RegisterSet }}</code></td><td>{{ .BoardLabel }}</td></tr>
+            <tr><td>Controller build</td><td><code>{{ .Build.Version }}</code></td><td>Commit <code>{{ .Build.Commit }}</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p class="helper">The vendor CLI does not independently identify a physical product model. This page therefore reports register-set compatibility without claiming product identity.</p>
+    </details>
+  </section>
+{{ template "footer" . }}{{ end }}

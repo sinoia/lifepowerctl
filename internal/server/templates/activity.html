@@ -1,0 +1,16 @@
+{{ define "activity-list" }}{{ template "header" . }}
+  <div class="page-heading"><p class="eyebrow">Retained operational history</p><h1>Activity</h1><p class="lead">Recent controller, authentication, and board observations. Newest events appear first.</p></div>
+  <div class="notice"><strong>Need a support snapshot?</strong> <a href="/diagnostics/report.json">Download the bounded diagnostic report (JSON)</a>. It includes current register observations and Activity metadata, but excludes authentication data and Activity detail payloads.</div>
+  <form class="card filter-form" action="/activity" method="get">
+    <div><label for="activity-type">Event type</label><select id="activity-type" name="type"><option value="">All event types</option>{{ range .Kinds }}<option value="{{ .Value }}" {{ if .Selected }}selected{{ end }}>{{ .Label }}</option>{{ end }}</select></div>
+    <div><label for="activity-actor">Actor</label><select id="activity-actor" name="actor"><option value="">All actors</option>{{ range .Actors }}<option value="{{ .Value }}" {{ if .Selected }}selected{{ end }}>{{ .Label }}</option>{{ end }}</select></div>
+    <div class="button-row"><button type="submit">Apply filters</button><a class="button-secondary" href="/activity">Clear filters</a></div>
+  </form>
+  {{ if .Truncated }}<div class="notice notice-warning">Showing the newest 200 matching retained events. Narrow the filters to see older matching events.</div>{{ end }}
+  {{ if .Events }}<div class="table-wrap"><table><thead><tr><th>Time</th><th>Event</th><th>Actor</th><th>Subject</th></tr></thead><tbody>{{ range .Events }}<tr><td><a href="/activity/{{ .ID }}">{{ .Time }}</a></td><td>{{ .Label }}<br><code>{{ .Type }}</code></td><td>{{ .Actor }}</td><td>{{ if .Subject }}{{ if .SubjectLink }}<a href="{{ .SubjectLink }}"><code>{{ .Subject }}</code></a>{{ else }}<code>{{ .Subject }}</code>{{ end }}{{ else }}—{{ end }}</td></tr>{{ end }}</tbody></table></div>{{ else }}<div class="notice">No retained events match these filters.</div>{{ end }}
+{{ template "footer" . }}{{ end }}
+
+{{ define "activity-detail" }}{{ template "header" . }}
+  <p><a href="/activity">← Activity</a></p><div class="page-heading"><p class="eyebrow">Activity event {{ .ID }}</p><h1>{{ .Label }}</h1><p class="lead"><code>{{ .Type }}</code></p></div>
+  <section class="section-grid"><article class="card"><h2>Event</h2><dl class="status-list"><div><dt>Time</dt><dd>{{ .Time }}</dd></div><div><dt>Actor</dt><dd>{{ .Actor }}</dd></div><div><dt>Subject</dt><dd>{{ if .SubjectLink }}<a href="{{ .SubjectLink }}">{{ .Subject }}</a>{{ else }}{{ if .Subject }}{{ .Subject }}{{ else }}—{{ end }}{{ end }}</dd></div>{{ if .RunLink }}<div><dt>Run instance</dt><dd><a href="{{ .RunLink }}">View run details</a></dd></div>{{ end }}</dl></article><article class="card"><h2>Typed details</h2><pre>{{ .Details }}</pre></article></section>
+{{ template "footer" . }}{{ end }}

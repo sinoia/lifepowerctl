@@ -1,0 +1,10 @@
+* @sinoia
+
+/.github/ @sinoia
+/packaging/ @sinoia
+/scripts/ @sinoia
+/tools/hardware-gate/ @sinoia
+/internal/board/ @sinoia
+/internal/dutycycle/ @sinoia
+/internal/power/ @sinoia
+/internal/registeredit/ @sinoia

@@ -1,0 +1,31 @@
+# Project-local Go caches and build/release output.
+/.cache/
+/build/
+/dist/
+/coverage.out
+*.prof
+*.test
+
+# Local application state, review material, and temporary work.
+/.local/
+/.review/
+/.tmp/
+/tmp/
+*.log
+*.pid
+
+# Local configuration and credentials. Tracked fixtures use explicit names.
+.env
+.env.*
+*.local.json
+*.secret
+*.key
+*.pem
+
+# Editor and operating-system files.
+*~
+*.swp
+*.swo
+.DS_Store
+.idea/
+.vscode/

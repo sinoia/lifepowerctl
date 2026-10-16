@@ -1,0 +1,10 @@
+[Unit]
+Description=LifePower Control fixed orderly poweroff admission
+Documentation=man:systemd.path(5)
+
+[Path]
+PathExists=/run/lifepowerctl-power/poweroff.request
+Unit=lifepowerctl-poweroff.service
+
+[Install]
+WantedBy=multi-user.target

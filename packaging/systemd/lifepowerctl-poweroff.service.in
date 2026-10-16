@@ -1,0 +1,33 @@
+[Unit]
+Description=LifePower Control fixed orderly poweroff request
+Documentation=man:systemctl(1)
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/rm -f /run/lifepowerctl-power/poweroff.request
+ExecStart=/usr/bin/sleep 8
+ExecStart=/usr/bin/systemctl --no-block poweroff
+User=root
+Group=root
+UMask=0077
+LimitNOFILE=64
+NoNewPrivileges=yes
+AmbientCapabilities=
+PrivateDevices=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native

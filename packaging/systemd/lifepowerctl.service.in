@@ -1,0 +1,46 @@
+[Unit]
+Description=LifePower Control web administration service
+After=network.target lifepowerctl-controller.service
+Requires=lifepowerctl-controller.service
+
+[Service]
+Type=simple
+User=lifepowerctl
+Group=lifepowerctl
+SupplementaryGroups=lifepowerctl-jobs i2c
+ExecStart=/usr/lib/lifepowerctl/lifepowerctl serve -config /etc/lifepowerctl/config.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=10s
+UMask=0027
+MemoryMax=128M
+TasksMax=64
+LimitNOFILE=256
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/i2c-1 rw
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ReadWritePaths=/var/lib/lifepowerctl
+ReadOnlyPaths=/var/lib/lifepowerctl-jobs/output
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

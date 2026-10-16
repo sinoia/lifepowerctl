@@ -1,0 +1,77 @@
+{{ define "header" }}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>{{ .Title }} — LifePower Pi Control</title>
+  <script src="/static/theme.js?v=1"></script>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <header class="site-header">
+    <div class="site-identity">
+      <a class="brand" href="/">LifePower Pi Control</a>
+      <span class="device-identity">Host <code>{{ hostName }}</code></span>
+    </div>
+    <nav aria-label="Primary">
+      <a {{ if eq .Current "overview" }}aria-current="page"{{ end }} href="/">Overview</a>
+      <a {{ if eq .Current "registers" }}aria-current="page"{{ end }} href="/registers">Registers</a>
+      <a {{ if eq .Current "duty-cycle" }}aria-current="page"{{ end }} href="/duty-cycle">Duty Cycle</a>
+      <a {{ if eq .Current "jobs" }}aria-current="page"{{ end }} href="/jobs">Jobs</a>
+      <a {{ if eq .Current "activity" }}aria-current="page"{{ end }} href="/activity">Activity</a>
+    </nav>
+    <details class="settings-menu" data-settings-menu>
+      <summary class="settings-trigger">Appearance</summary>
+      <div class="settings-panel">
+        <fieldset class="theme-options">
+          <legend>Theme</legend>
+          <label><input type="radio" name="site-theme" value="auto" data-theme-choice> Automatic</label>
+          <label><input type="radio" name="site-theme" value="dark" data-theme-choice> Dark</label>
+          <label><input type="radio" name="site-theme" value="light" data-theme-choice> Light</label>
+        </fieldset>
+      </div>
+    </details>
+    <form action="/logout" method="post">
+      <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+      <button class="button-secondary" type="submit">Sign out</button>
+    </form>
+  </header>
+  <main class="page-shell" id="main-content">
+{{ end }}
+
+{{ define "footer" }}
+  </main>
+  <footer class="site-footer">
+    LifePower Control {{ .Build.Version }} · commit {{ .Build.Commit }} · local administration
+  </footer>
+  <script src="/static/busy.js?v=1" defer></script>
+</body>
+</html>{{ end }}
+
+{{ define "auth-header" }}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark light">
+  <title>{{ .Title }} — LifePower Pi Control</title>
+  <script src="/static/theme.js?v=1"></script>
+  <link rel="stylesheet" href="/static/app.css?v=3">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+  <main class="page-shell auth-shell" id="main-content">
+    <div class="page-heading">
+      <p class="eyebrow">LifePower Pi Control · Host <code>{{ hostName }}</code></p>
+      <h1>{{ .Title }}</h1>
+    </div>
+{{ end }}
+
+{{ define "auth-footer" }}
+  </main>
+  <footer class="site-footer">LifePower Control {{ .Build.Version }} · commit {{ .Build.Commit }}</footer>
+  <script src="/static/busy.js?v=1" defer></script>
+</body>
+</html>{{ end }}

@@ -1,0 +1,38 @@
+[Unit]
+Description=LifePower Control selected-user job runner
+After=local-fs.target systemd-tmpfiles-setup.service
+RequiresMountsFor=@JOB_HOME@ /var/lib/lifepowerctl-jobs
+
+[Service]
+Type=simple
+User=@JOB_USER@
+Group=@JOB_GROUP@
+SupplementaryGroups=lifepowerctl-jobs
+Environment=HOME=@JOB_HOME@
+WorkingDirectory=@JOB_HOME@
+ExecStart=/usr/lib/lifepowerctl/lifepowerctl job-runner --socket /run/lifepowerctl/jobs.sock --spool /var/lib/lifepowerctl-jobs --controller-uid @CONTROLLER_UID@
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+KillMode=control-group
+UMask=0027
+MemoryMax=256M
+TasksMax=64
+LimitNOFILE=1024
+PrivateDevices=no
+PrivateTmp=no
+ProtectSystem=full
+ProtectHome=no
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ReadWritePaths=/run/lifepowerctl /var/lib/lifepowerctl-jobs @JOB_HOME@
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,104 @@
+# Installation
+
+Install only a version shown as published on this repository's GitHub Releases
+page. Drafts, workflow artifacts, and assets presented as official releases
+from another location are not supported installation sources.
+
+## Before you start
+
+You need:
+
+- a supported LiFePO4wered/Pi+ connected as documented by its manufacturer;
+- Raspberry Pi OS Lite 64-bit Trixie, or the supported legacy 64-bit Bookworm
+  image;
+- the manufacturer's daemon and `/usr/local/bin/lifepo4wered-cli` installed
+  and working;
+- `systemd`, `wget` or `curl`, `sha256sum`, `tar`, and ordinary Debian account
+  tools; and
+- an ordinary, non-root Linux account under which saved jobs may run.
+
+Back up the Pi before installing software that can schedule shutdown and wake.
+Do not begin while another process is changing the board or while the Pi is
+performing important work.
+
+## Download and verify an exact release
+
+On the selected GitHub release page, save `install.sh` and `checksums.txt` for
+the same immutable tag. Do not pipe a network response into `sudo sh`.
+
+```console
+wget -O install.sh https://github.com/sinoia/lifepowerctl/releases/download/v0.1.0/install.sh
+wget -O checksums.txt https://github.com/sinoia/lifepowerctl/releases/download/v0.1.0/checksums.txt
+chmod 0600 install.sh
+grep ' install.sh$' checksums.txt
+sha256sum install.sh
+sh -n install.sh
+sh ./install.sh --release-info
+less install.sh
+```
+
+For a later release, replace `v0.1.0` in both URLs with that exact published
+tag. If an exact URL does not resolve to a published release, stop. Compare the
+calculated digest with the single `install.sh` entry in `checksums.txt`. Then follow
+[Release verification](release-verification.md) to verify the GitHub
+attestation and source identity before granting root privileges.
+
+## Run the installer
+
+Interactive installation is preferred:
+
+```console
+sudo sh ./install.sh
+```
+
+The installer reports the fixed release, detected platform and board
+prerequisite, selected job account, proposed web-service lifecycle, and every
+system location it will change. Review the summary before confirming.
+
+For unattended provisioning, both choices must be explicit:
+
+```console
+sudo sh ./install.sh --non-interactive --job-user pi --web=enabled
+```
+
+Replace `pi` with the ordinary account that should own saved jobs. Use
+`--web=on-demand` if the web interface should remain stopped until you start
+it manually. The controller and job runner remain enabled because an active
+duty cycle must not depend on the web process.
+
+The installer creates a locked `lifepowerctl` service account and a narrowly
+shared `lifepowerctl-jobs` group. It does not grant the selected job account
+sudo, I2C, or board access. It preserves any authority that account already
+has, so choose it deliberately.
+
+## First login
+
+Fresh installation prints a one-time setup URL only to the controlling
+terminal. It is a secret and expires. From another computer, first create an
+SSH tunnel:
+
+```console
+ssh -N -L 8080:127.0.0.1:8080 pi@raspberrypi.local
+```
+
+Replace the example account and hostname with those configured on your Pi.
+Open the printed setup URL using `127.0.0.1:8080` in that browser. Choose the
+owner password, then sign in. Do not paste the setup URL into chat, logs, issue
+reports, or screenshots.
+
+If the link expires or is lost, follow [Authentication recovery](recovery.md#authentication-recovery).
+
+## Verify the installation
+
+```console
+systemctl --no-pager --full status lifepowerctl-controller.service
+systemctl --no-pager --full status lifepowerctl-job-runner.service
+systemctl --no-pager --full status lifepowerctl.service
+sudo -u lifepowerctl /usr/lib/lifepowerctl/lifepowerctl \
+  admin status -config /etc/lifepowerctl/config.json
+```
+
+An on-demand web installation is expected to show `lifepowerctl.service` as
+inactive until it is started. Check the dashboard's board identity and
+telemetry before attempting any change. Do not enable a duty cycle during the
+initial verification.

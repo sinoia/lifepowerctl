@@ -1,0 +1,90 @@
+name: Pull request CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Format, test, vet, build, and policy
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up supported Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: go.sum
+      - name: Verify formatting
+        run: test -z "$(gofmt -l $(find cmd internal -type f -name '*.go' -print))"
+      - name: Verify module files are tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: Verify downloaded modules
+        run: go mod verify
+      - name: Run tests
+        run: go test -buildvcs=false ./...
+      - name: Run vet
+        run: go vet ./...
+      - name: Cross-build the supported production target
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: arm64
+        run: go build -buildvcs=false -trimpath -o /tmp/lifepowerctl-linux-arm64 ./cmd/lifepowerctl
+      - name: Check shell syntax and policy
+        run: |
+          sh -n packaging/release/install.sh.in
+          sh -n packaging/release/uninstall.sh.in
+          sh -n scripts/*.sh
+          sh -n tools/hardware-gate/*.sh
+          shellcheck packaging/release/*.sh.in scripts/*.sh tools/hardware-gate/*.sh
+      - name: Check public tree and documentation
+        run: sh scripts/check-public-tree.sh
+
+  minimum-go:
+    name: Minimum declared Go version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Go 1.24
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.24.13'
+          cache-dependency-path: go.sum
+      - name: Run minimum-version tests
+        run: go test -buildvcs=false ./...
+
+  race:
+    name: Race detector
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up supported Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27.2'
+          cache-dependency-path: go.sum
+      - name: Run race-enabled tests
+        run: go test -buildvcs=false -race ./...

@@ -1,0 +1,1444 @@
+#!/bin/sh
+
+set -eu
+umask 077
+export LC_ALL=C
+PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+export PATH
+
+PRODUCT='lifepowerctl'
+REPOSITORY='sinoia/lifepowerctl'
+RELEASE_VERSION='@RELEASE_VERSION@'
+RELEASE_COMMIT='@RELEASE_COMMIT@'
+RELEASE_ARCHIVE='@RELEASE_ARCHIVE@'
+RELEASE_BASE_URL='@RELEASE_BASE_URL@'
+CHECKSUM_ASSET='checksums.txt'
+UNINSTALL_ASSET='uninstall.sh'
+
+SERVICE_USER='lifepowerctl'
+SERVICE_GROUP='lifepowerctl'
+JOBS_GROUP='lifepowerctl-jobs'
+INSTALL_ROOT='/usr/lib/lifepowerctl'
+CONFIG_ROOT='/etc/lifepowerctl'
+STATE_ROOT='/var/lib/lifepowerctl'
+JOBS_ROOT='/var/lib/lifepowerctl-jobs'
+METADATA_ROOT='/var/lib/lifepowerctl-installer'
+RUNTIME_ROOT='/run/lifepowerctl'
+POWER_RUNTIME_ROOT='/run/lifepowerctl-power'
+SYSTEMD_ROOT='/etc/systemd/system'
+TMPFILES_POLICY='/etc/tmpfiles.d/lifepowerctl.conf'
+SUDOERS_POLICY='/etc/sudoers.d/lifepowerctl'
+TRANSACTION_FILE="${METADATA_ROOT}/transaction"
+PREVIOUS_ROOT="${METADATA_ROOT}/previous"
+ROOT_UID=0
+ROOT_GID=0
+
+usage() {
+    printf '%s\n' \
+        "LifePower Control installer ${RELEASE_VERSION}" '' 'Usage:' \
+        '  sudo sh ./install.sh [--job-user USER] [--web=enabled|on-demand]' \
+        '  sudo sh ./install.sh [--allow-downgrade]' \
+        '  sudo sh ./install.sh --non-interactive --job-user USER --web=enabled|on-demand [--accept-existing-authority] [--allow-downgrade]' \
+        '  sudo sh ./install.sh --recover' \
+        '  sh ./install.sh --release-info' '  sh ./install.sh --help' '' \
+        'The fresh installer supports ARM64 Raspberry Pi OS 12 and 13. It uses' \
+        'the existing vendor CLI, active daemon, and /dev/i2c-1; installs the' \
+        'sudo caller as job user by default; and enables web service on port 8080.' \
+        'It downloads only its embedded exact-version assets. Existing installs' \
+        'are verified or updated only while maintenance is authoritatively safe.' '' \
+        '--allow-downgrade is required for an older compatible release.' \
+        '--recover validates and rolls back an interrupted fresh install,' \
+        'lifecycle update, or preserved-data reinstall created by this exact' \
+        'installer; it never repairs' \
+        'unknown state.' '' \
+        '--development-host permits Debian 12/13 only for deliberate local' \
+        'testing; it does not relax architecture, hardware, or health checks.'
+}
+
+release_info() {
+    printf '%s\n' 'format=1' "product=${PRODUCT}" "repository=${REPOSITORY}" \
+        "version=${RELEASE_VERSION}" "commit=${RELEASE_COMMIT}" \
+        "archive=${RELEASE_ARCHIVE}" "release_base_url=${RELEASE_BASE_URL}" \
+        "checksums=${CHECKSUM_ASSET}"
+}
+
+fail() { printf '%s\n' "install failed: $*" >&2; exit 1; }
+note() { printf '%s\n' "$*" >&2; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
+ask_yes() {
+    printf '%s [y/N] ' "$1" >/dev/tty
+    IFS= read -r answer </dev/tty || return 1
+    case "$answer" in y|Y|yes|YES|Yes) return 0 ;; *) return 1 ;; esac
+}
+
+safe_remove_work() {
+    case "${work_directory-}" in
+        /tmp/lifepowerctl-install.*) rm -rf -- "$work_directory" ;;
+        '') ;;
+        *) note "refusing unsafe temporary cleanup: $work_directory" ;;
+    esac
+}
+
+failure_point() { :; }
+
+write_transaction() {
+    transaction_phase=$1
+    transaction_new="${TRANSACTION_FILE}.new"
+    printf '%s\n' 'format=1' 'operation=fresh-install' \
+        "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" \
+        "work_directory=$work_directory" "phase=$transaction_phase" >"$transaction_new"
+    chmod 0600 "$transaction_new"
+    mv -f -- "$transaction_new" "$TRANSACTION_FILE"
+    failure_point "$transaction_phase"
+}
+
+write_lifecycle_transaction() {
+    transaction_phase=$1
+    transaction_new="${TRANSACTION_FILE}.new"
+    printf '%s\n' 'format=1' 'operation=lifecycle-update' \
+        "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "previous_version=$installed_version" "previous_commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" \
+        "work_directory=$work_directory" "phase=$transaction_phase" \
+        "previous_web_active=$current_web_active" \
+        "previous_schema_min=$previous_schema_minimum" \
+        "previous_schema_current=$previous_schema_current" >"$transaction_new"
+    chmod 0600 "$transaction_new"
+    mv -f -- "$transaction_new" "$TRANSACTION_FILE"
+    rollback_authorized=1
+    failure_point "$transaction_phase"
+}
+
+write_restore_transaction() {
+    transaction_phase=$1
+    transaction_new="${TRANSACTION_FILE}.new"
+    printf '%s\n' 'format=1' 'operation=preserved-reinstall' \
+        "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "previous_version=$installed_version" "previous_commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" \
+        "state_schema=$preserved_state_schema" \
+        "work_directory=$work_directory" "phase=$transaction_phase" >"$transaction_new"
+    chmod 0600 "$transaction_new"
+    mv -f -- "$transaction_new" "$TRANSACTION_FILE"
+    rollback_authorized=1
+    failure_point "$transaction_phase"
+}
+
+transaction_value() {
+    transaction_name=$1
+    transaction_count=$(sed -n "s/^${transaction_name}=//p" "$TRANSACTION_FILE" | wc -l)
+    [ "$transaction_count" -eq 1 ] || fail "transaction marker has a missing or duplicate field: $transaction_name"
+    sed -n "s/^${transaction_name}=//p" "$TRANSACTION_FILE"
+}
+
+record_value() {
+    record_file=$1
+    record_name=$2
+    record_count=$(sed -n "s/^${record_name}=//p" "$record_file" | wc -l)
+    [ "$record_count" -eq 1 ] || fail "record has a missing or duplicate field: $record_name"
+    sed -n "s/^${record_name}=//p" "$record_file"
+}
+
+compare_release_versions() {
+    awk -v target="${1#v}" -v installed="${2#v}" '
+        function result(value) { print value; exit }
+        function numeric(value) { return value ~ /^[0-9]+$/ }
+        BEGIN {
+            target_dash = index(target, "-")
+            installed_dash = index(installed, "-")
+            target_core = target_dash ? substr(target, 1, target_dash - 1) : target
+            installed_core = installed_dash ? substr(installed, 1, installed_dash - 1) : installed
+            target_pre = target_dash ? substr(target, target_dash + 1) : ""
+            installed_pre = installed_dash ? substr(installed, installed_dash + 1) : ""
+            split(target_core, target_parts, ".")
+            split(installed_core, installed_parts, ".")
+            for (i = 1; i <= 3; i++) {
+                if (target_parts[i] + 0 > installed_parts[i] + 0) result("upgrade")
+                if (target_parts[i] + 0 < installed_parts[i] + 0) result("downgrade")
+            }
+            if (target_pre == installed_pre) result("same")
+            if (target_pre == "") result("upgrade")
+            if (installed_pre == "") result("downgrade")
+            target_count = split(target_pre, target_identifiers, ".")
+            installed_count = split(installed_pre, installed_identifiers, ".")
+            maximum = target_count > installed_count ? target_count : installed_count
+            for (i = 1; i <= maximum; i++) {
+                if (i > target_count) result("downgrade")
+                if (i > installed_count) result("upgrade")
+                target_numeric = numeric(target_identifiers[i])
+                installed_numeric = numeric(installed_identifiers[i])
+                if (target_numeric && installed_numeric) {
+                    if (target_identifiers[i] + 0 > installed_identifiers[i] + 0) result("upgrade")
+                    if (target_identifiers[i] + 0 < installed_identifiers[i] + 0) result("downgrade")
+                } else if (target_numeric != installed_numeric) {
+                    result(target_numeric ? "downgrade" : "upgrade")
+                } else {
+                    if (target_identifiers[i] > installed_identifiers[i]) result("upgrade")
+                    if (target_identifiers[i] < installed_identifiers[i]) result("downgrade")
+                }
+            }
+            result("same")
+        }
+    '
+}
+
+load_installation_record() {
+    installation_action=fresh
+    [ ! -L "$METADATA_ROOT" ] || fail "installer metadata is a symlink: $METADATA_ROOT"
+    if [ ! -e "$METADATA_ROOT" ]; then return 0; fi
+    [ -d "$METADATA_ROOT" ] || fail "installer metadata is not a directory: $METADATA_ROOT"
+    [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'installer metadata ownership or mode is unsafe'
+    if [ -e "$TRANSACTION_FILE" ] || [ -L "$TRANSACTION_FILE" ]; then
+        fail 'an interrupted install is recorded; inspect it, then run this exact saved installer with --recover'
+    fi
+    installed_file="$METADATA_ROOT/installed"
+    preserved_file="$METADATA_ROOT/preserved"
+    if [ -e "$preserved_file" ] || [ -L "$preserved_file" ]; then
+        [ -f "$preserved_file" ] && [ ! -L "$preserved_file" ] || fail 'preserved-install record is unsafe'
+        [ "$(stat -c '%u:%g:%a' "$preserved_file")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'preserved-install record ownership or mode is unsafe'
+        [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = preserved ] || fail 'preserved installer metadata contains an unexpected entry'
+        [ "$(wc -l <"$preserved_file")" -eq 6 ] || fail 'preserved-install record has unexpected fields'
+        [ "$(record_value "$preserved_file" format)" = 1 ] || fail 'preserved-install record format is unsupported'
+        installed_version=$(record_value "$preserved_file" version)
+        installed_commit=$(record_value "$preserved_file" commit)
+        installed_job_user=$(record_value "$preserved_file" job_user)
+        installed_web=$(record_value "$preserved_file" web)
+        preserved_state_schema=$(record_value "$preserved_file" state_schema)
+        printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'preserved-install version is invalid'
+        printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'preserved-install commit is invalid'
+        printf '%s\n' "$installed_job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'preserved-install job user is invalid'
+        case "$installed_web" in enabled|on-demand) ;; *) fail 'preserved-install web lifecycle is invalid' ;; esac
+        case "$preserved_state_schema" in ''|*[!0-9]*) fail 'preserved durable schema is invalid' ;; esac
+        installation_action=restore
+        return 0
+    fi
+    [ -f "$installed_file" ] && [ ! -L "$installed_file" ] || fail 'installer metadata has no safe installed record; use the matching saved installer recovery procedure'
+    [ "$(stat -c '%u:%g:%a' "$installed_file")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'installed record ownership or mode is unsafe'
+    [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed ] || fail 'installer metadata contains an unexpected entry; use the matching saved installer recovery procedure'
+    [ "$(wc -l <"$installed_file")" -eq 5 ] || fail 'installed record has unexpected fields'
+    installed_format=$(record_value "$installed_file" format)
+    installed_version=$(record_value "$installed_file" version)
+    installed_commit=$(record_value "$installed_file" commit)
+    installed_job_user=$(record_value "$installed_file" job_user)
+    installed_web=$(record_value "$installed_file" web)
+    [ "$installed_format" = 1 ] || fail 'installed record format is unsupported'
+    printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'installed record version is invalid'
+    printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'installed record commit is invalid'
+    printf '%s\n' "$installed_job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'installed record job user is invalid'
+    case "$installed_web" in enabled|on-demand) ;; *) fail 'installed record web lifecycle is invalid' ;; esac
+    installation_action=$(compare_release_versions "$RELEASE_VERSION" "$installed_version")
+    if [ "$installation_action" = same ]; then
+        [ "$RELEASE_COMMIT" = "$installed_commit" ] || fail 'the installed version has a different commit; release immutability is violated'
+        installation_action=same-version
+    elif [ "$installation_action" = downgrade ]; then
+        [ "$allow_downgrade" -eq 1 ] || fail "downgrade from $installed_version to $RELEASE_VERSION requires --allow-downgrade"
+    fi
+}
+
+validate_managed_directory() {
+    [ ! -L "$1" ] || fail "recovery refused a managed symlink: $1"
+    [ ! -e "$1" ] || [ -d "$1" ] || fail "recovery refused a non-directory managed path: $1"
+}
+
+validate_managed_file() {
+    [ ! -L "$1" ] || fail "recovery refused a managed symlink: $1"
+    [ ! -e "$1" ] || [ -f "$1" ] || fail "recovery refused a non-file managed path: $1"
+}
+
+validate_recovery_accounts() {
+    service_group_line=$(getent group "$SERVICE_GROUP" || :)
+    jobs_group_line=$(getent group "$JOBS_GROUP" || :)
+    service_user_line=$(getent passwd "$SERVICE_USER" || :)
+    if [ -n "$service_group_line" ]; then
+        service_gid=$(printf '%s\n' "$service_group_line" | cut -d: -f3)
+        service_members=$(printf '%s\n' "$service_group_line" | cut -d: -f4)
+        [ -z "$service_members" ] || fail 'recovery refused an unexpected service-group member'
+        other_primary=$(getent passwd | awk -F: -v gid="$service_gid" '$4 == gid && $1 != "lifepowerctl" { print $1; exit }')
+        [ -z "$other_primary" ] || fail "recovery refused a service group used by another primary account: $other_primary"
+    fi
+    if [ -n "$service_user_line" ]; then
+        [ -n "$service_group_line" ] || fail 'recovery refused a service account without its expected primary group'
+        expected_service_line=$(printf '%s\n' "$service_user_line" | awk -F: -v gid="$service_gid" -v home="$STATE_ROOT" \
+            '$1 == "lifepowerctl" && $3 > 0 && $3 < 1000 && $4 == gid && $6 == home && $7 == "/usr/sbin/nologin" { print "yes" }')
+        [ "$expected_service_line" = yes ] || fail 'recovery refused an unexpected service-account definition'
+    fi
+    if [ -n "$jobs_group_line" ]; then
+        jobs_gid=$(printf '%s\n' "$jobs_group_line" | cut -d: -f3)
+        jobs_primary=$(getent passwd | awk -F: -v gid="$jobs_gid" '$4 == gid { print $1; exit }')
+        [ -z "$jobs_primary" ] || fail "recovery refused a jobs group used as a primary group: $jobs_primary"
+        jobs_members=$(printf '%s\n' "$jobs_group_line" | cut -d: -f4)
+        old_ifs=$IFS; IFS=,
+        for member in $jobs_members
+        do
+            [ -z "$member" ] || [ "$member" = "$SERVICE_USER" ] || [ "$member" = "$job_user" ] || \
+                fail "recovery refused unexpected jobs-group member: $member"
+        done
+        IFS=$old_ifs
+    fi
+}
+
+validate_recovery_scope() {
+    [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'transaction metadata directory is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'transaction metadata directory ownership or mode is unsafe'
+    [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'transaction marker is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$TRANSACTION_FILE")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'transaction marker ownership or mode is unsafe'
+    metadata_entries=$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+    case "$metadata_entries" in
+        transaction|"installed.new
+transaction"|"transaction
+transaction.new"|"installed.new
+transaction
+transaction.new") ;;
+        *) fail 'transaction metadata directory contains an unexpected entry' ;;
+    esac
+    for transient in "$METADATA_ROOT/transaction.new" "$METADATA_ROOT/installed.new"
+    do
+        if [ -e "$transient" ] || [ -L "$transient" ]; then
+            [ -f "$transient" ] && [ ! -L "$transient" ] || fail "recovery refused unsafe transient metadata: $transient"
+            [ "$(stat -c '%u:%g:%a' "$transient")" = "$ROOT_UID:$ROOT_GID:600" ] || fail "recovery refused transient metadata ownership or mode: $transient"
+        fi
+    done
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 8 ] || fail 'transaction marker has unexpected fields'
+    transaction_format=$(transaction_value format)
+    transaction_operation=$(transaction_value operation)
+    transaction_version=$(transaction_value version)
+    transaction_commit=$(transaction_value commit)
+    job_user=$(transaction_value job_user)
+    web_lifecycle=$(transaction_value web)
+    work_directory=$(transaction_value work_directory)
+    transaction_phase=$(transaction_value phase)
+    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = fresh-install ] || fail 'transaction marker type is unsupported'
+    [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'transaction marker belongs to a different installer release'
+    printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'transaction marker contains an unsafe job user'
+    case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'transaction marker contains an invalid web lifecycle' ;; esac
+    case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'transaction marker contains an unsafe work directory' ;; esac
+    case "$transaction_phase" in metadata|service-group|jobs-group|service-user|memberships|policy|directories|payload|units|setup|enabled|started|healthy) ;; *) fail 'transaction marker contains an invalid phase' ;; esac
+    if [ -e "$work_directory" ] || [ -L "$work_directory" ]; then
+        [ -d "$work_directory" ] && [ ! -L "$work_directory" ] || fail 'recovery refused an unsafe work directory'
+        work_mode=$(stat -c '%u:%g:%a' "$work_directory")
+        [ "$work_mode" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'recovery refused work-directory ownership or mode'
+    fi
+    for path in "$INSTALL_ROOT" "$CONFIG_ROOT" "$STATE_ROOT" "$JOBS_ROOT" "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT"
+    do validate_managed_directory "$path"; done
+    for path in "$SYSTEMD_ROOT/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY"
+    do validate_managed_file "$path"; done
+    validate_recovery_accounts
+}
+
+rollback_fresh() {
+    [ "${rollback_authorized-0}" -eq 1 ] || return 0
+    validate_recovery_scope
+    note 'Rolling back the incomplete fresh install.'
+    rollback_failed=0
+    for unit in lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path
+    do
+        if [ -f "$SYSTEMD_ROOT/$unit" ]; then
+            systemctl stop "$unit" >/dev/null 2>&1 || :
+            active_state=$(systemctl show --property=ActiveState --value "$unit" 2>/dev/null || :)
+            case "$active_state" in inactive|failed) ;; *) rollback_failed=1 ;; esac
+            systemctl disable "$unit" >/dev/null 2>&1 || :
+            enabled_state=$(systemctl is-enabled "$unit" 2>/dev/null || :)
+            case "$enabled_state" in disabled|static|indirect|not-found) ;; *) rollback_failed=1 ;; esac
+        fi
+    done
+    rm -f -- "$SYSTEMD_ROOT/lifepowerctl.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY" || rollback_failed=1
+    systemctl daemon-reload >/dev/null 2>&1 || rollback_failed=1
+    case ",${jobs_members-}," in
+        *",$job_user,"*) gpasswd -d "$job_user" "$JOBS_GROUP" >/dev/null 2>&1 || rollback_failed=1 ;;
+    esac
+    if [ -n "${service_user_line-}" ]; then userdel "$SERVICE_USER" >/dev/null 2>&1 || rollback_failed=1; fi
+    if [ -n "${jobs_group_line-}" ]; then groupdel "$JOBS_GROUP" >/dev/null 2>&1 || rollback_failed=1; fi
+    if [ -n "${service_group_line-}" ]; then groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || rollback_failed=1; fi
+    rm -rf -- "$INSTALL_ROOT" "$CONFIG_ROOT" "$STATE_ROOT" "$JOBS_ROOT" "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT" || rollback_failed=1
+    [ "$rollback_failed" -eq 0 ] || fail 'rollback was incomplete; the validated transaction marker was preserved for another bounded recovery attempt'
+    rm -f -- "$TRANSACTION_FILE" "$METADATA_ROOT/transaction.new" "$METADATA_ROOT/installed.new"
+    rmdir "$METADATA_ROOT"
+    rollback_authorized=0
+}
+
+recover_fresh() {
+    [ "$(id -u)" -eq 0 ] || fail 'root is required for recovery'
+    if [ -e "$METADATA_ROOT/installed" ] || [ -L "$METADATA_ROOT/installed" ]; then
+        fail 'recovery refused a completed install'
+    fi
+    if [ ! -e "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ]; then
+        [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'no recoverable fresh-install transaction was found'
+        [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'transaction metadata directory ownership or mode is unsafe'
+        metadata_entries=$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+        if [ -z "$metadata_entries" ]; then
+            rmdir "$METADATA_ROOT"
+            note 'Removed the empty metadata directory left before transaction creation.'
+            return 0
+        fi
+        [ "$metadata_entries" = transaction.new ] || fail 'metadata directory is not a bounded interrupted transaction'
+        [ -f "$METADATA_ROOT/transaction.new" ] && [ ! -L "$METADATA_ROOT/transaction.new" ] || fail 'transaction staging marker is unsafe'
+        [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT/transaction.new")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'transaction staging marker ownership or mode is unsafe'
+        mv -- "$METADATA_ROOT/transaction.new" "$TRANSACTION_FILE"
+    fi
+    validate_recovery_scope
+    rollback_authorized=1
+    rollback_fresh
+    safe_remove_work
+    note 'Interrupted fresh install recovered; a new install may now be started.'
+}
+
+validate_previous_payload() {
+    [ -d "$PREVIOUS_ROOT" ] && [ ! -L "$PREVIOUS_ROOT" ] || fail 'previous-payload directory is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$PREVIOUS_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'previous-payload directory ownership or mode is unsafe'
+    [ "$(find "$PREVIOUS_ROOT" -mindepth 1 -maxdepth 1 -print | wc -l)" -eq 11 ] || fail 'previous-payload directory has unexpected entries'
+    require_backup_file() {
+        [ -f "$PREVIOUS_ROOT/$1" ] && [ ! -L "$PREVIOUS_ROOT/$1" ] || fail "previous payload is missing or unsafe: $1"
+        [ "$(stat -c '%u:%g:%a' "$PREVIOUS_ROOT/$1")" = "$ROOT_UID:$ROOT_GID:$2" ] || fail "previous payload ownership or mode is unsafe: $1"
+    }
+    require_backup_file lifepowerctl 755
+    require_backup_file uninstall.sh 755
+    require_backup_file install-manifest 644
+    require_backup_file controller.service 644
+    require_backup_file job-runner.service 644
+    require_backup_file poweroff.service 644
+    if [ -f "$PREVIOUS_ROOT/poweroff.path" ]; then
+        require_backup_file poweroff.path 644
+        [ ! -e "$PREVIOUS_ROOT/poweroff.path.absent" ] || fail 'previous poweroff-path state is ambiguous'
+    else
+        require_backup_file poweroff.path.absent 644
+        [ ! -e "$PREVIOUS_ROOT/poweroff.path" ] || fail 'previous poweroff-path state is ambiguous'
+    fi
+    require_backup_file web.service 644
+    require_backup_file tmpfiles.conf 644
+    require_backup_file sudoers 440
+    require_backup_file installed 600
+    [ "$(wc -l <"$PREVIOUS_ROOT/installed")" -eq 5 ] || fail 'previous installed record has unexpected fields'
+    [ "$(record_value "$PREVIOUS_ROOT/installed" format)" = 1 ] || fail 'previous installed record format is unsupported'
+    previous_machine=$(timeout 10 "$PREVIOUS_ROOT/lifepowerctl" version --machine) || fail 'previous executable cannot report machine metadata'
+    require_machine_metadata_shape "$previous_machine" 'previous executable metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "version=$installed_version" "commit=$installed_commit" \
+        'source_state=clean' 'target_os=linux' 'target_arch=arm64' \
+        "state_schema_current=$previous_schema_current" "state_schema_min_readable=$previous_schema_minimum"
+    do require_line_once "$previous_machine" "$expected" 'previous executable metadata'; done
+    previous_uninstall=$(timeout 5 /bin/sh "$PREVIOUS_ROOT/uninstall.sh" --release-info) || fail 'previous uninstaller cannot report release metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "repository=$REPOSITORY" "version=$installed_version" "commit=$installed_commit"
+    do require_line_once "$previous_uninstall" "$expected" 'previous uninstaller metadata'; done
+    [ "$(record_value "$PREVIOUS_ROOT/installed" version)" = "$installed_version" ] || fail 'previous installed record version is inconsistent'
+    [ "$(record_value "$PREVIOUS_ROOT/installed" commit)" = "$installed_commit" ] || fail 'previous installed record commit is inconsistent'
+    [ "$(record_value "$PREVIOUS_ROOT/installed" job_user)" = "$job_user" ] || fail 'previous installed record job user is inconsistent'
+    [ "$(record_value "$PREVIOUS_ROOT/installed" web)" = "$web_lifecycle" ] || fail 'previous installed record web lifecycle is inconsistent'
+}
+
+validate_lifecycle_recovery() {
+    [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'installer metadata directory is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'installer metadata ownership or mode is unsafe'
+    [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'lifecycle transaction marker is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$TRANSACTION_FILE")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'lifecycle transaction marker ownership or mode is unsafe'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 13 ] || fail 'lifecycle transaction marker has unexpected fields'
+    transaction_format=$(transaction_value format)
+    transaction_operation=$(transaction_value operation)
+    transaction_version=$(transaction_value version)
+    transaction_commit=$(transaction_value commit)
+    installed_version=$(transaction_value previous_version)
+    installed_commit=$(transaction_value previous_commit)
+    job_user=$(transaction_value job_user)
+    web_lifecycle=$(transaction_value web)
+    work_directory=$(transaction_value work_directory)
+    transaction_phase=$(transaction_value phase)
+    current_web_active=$(transaction_value previous_web_active)
+    previous_schema_minimum=$(transaction_value previous_schema_min)
+    previous_schema_current=$(transaction_value previous_schema_current)
+    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = lifecycle-update ] || fail 'lifecycle transaction type is unsupported'
+    [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'lifecycle transaction belongs to a different installer release'
+    printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'previous version in lifecycle transaction is invalid'
+    printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'previous commit in lifecycle transaction is invalid'
+    printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'lifecycle transaction job user is invalid'
+    case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'lifecycle transaction web setting is invalid' ;; esac
+    case "$current_web_active" in active|inactive) ;; *) fail 'lifecycle transaction web activity is invalid' ;; esac
+    case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'lifecycle transaction work directory is unsafe' ;; esac
+    case "$transaction_phase" in prepared|stopped|payload|units|started|healthy|committed) ;; *) fail 'lifecycle transaction phase is invalid' ;; esac
+    case "$previous_schema_minimum:$previous_schema_current" in *[!0-9:]*|:*|*:|*:*:*) fail 'lifecycle transaction schema range is invalid' ;; esac
+    [ "$previous_schema_minimum" -ge 1 ] && [ "$previous_schema_minimum" -le "$previous_schema_current" ] || fail 'lifecycle transaction schema range is invalid'
+    metadata_entries=$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+    for entry in $metadata_entries
+    do
+        case "$entry" in installed|installed.new|previous|transaction|transaction.new) ;; *) fail "installer metadata contains unexpected recovery entry: $entry" ;; esac
+    done
+    for required_entry in installed previous transaction
+    do [ -e "$METADATA_ROOT/$required_entry" ] && [ ! -L "$METADATA_ROOT/$required_entry" ] || fail "installer metadata is missing recovery entry: $required_entry"; done
+    [ -f "$METADATA_ROOT/installed" ] && [ ! -L "$METADATA_ROOT/installed" ] || fail 'installed record is unsafe during lifecycle recovery'
+    [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT/installed")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'installed record ownership or mode is unsafe during lifecycle recovery'
+    [ "$(wc -l <"$METADATA_ROOT/installed")" -eq 5 ] || fail 'installed record has unexpected fields during lifecycle recovery'
+    [ "$(record_value "$METADATA_ROOT/installed" format)" = 1 ] || fail 'installed record format is unsupported during lifecycle recovery'
+    for transient in "$METADATA_ROOT/installed.new" "$METADATA_ROOT/transaction.new"
+    do
+        if [ -e "$transient" ] || [ -L "$transient" ]; then
+            [ -f "$transient" ] && [ ! -L "$transient" ] || fail "lifecycle recovery transient is unsafe: $transient"
+            [ "$(stat -c '%u:%g:%a' "$transient")" = "$ROOT_UID:$ROOT_GID:600" ] || fail "lifecycle recovery transient ownership or mode is unsafe: $transient"
+        fi
+    done
+    recovery_installed_version=$(record_value "$METADATA_ROOT/installed" version)
+    recovery_installed_commit=$(record_value "$METADATA_ROOT/installed" commit)
+    case "$recovery_installed_version:$recovery_installed_commit" in
+        "$installed_version:$installed_commit"|"$RELEASE_VERSION:$RELEASE_COMMIT") ;;
+        *) fail 'installed record is inconsistent with lifecycle recovery' ;;
+    esac
+    [ "$(record_value "$METADATA_ROOT/installed" job_user)" = "$job_user" ] || fail 'installed record job user changed during lifecycle recovery'
+    [ "$(record_value "$METADATA_ROOT/installed" web)" = "$web_lifecycle" ] || fail 'installed record web lifecycle changed during lifecycle recovery'
+    if [ -e "$work_directory" ] || [ -L "$work_directory" ]; then
+        [ -d "$work_directory" ] && [ ! -L "$work_directory" ] || fail 'lifecycle recovery work directory is unsafe'
+        [ "$(stat -c '%u:%g:%a' "$work_directory")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'lifecycle recovery work-directory ownership or mode is unsafe'
+    fi
+    validate_previous_payload
+    check_existing_destinations
+}
+
+stop_lifecycle_services() {
+    for unit in lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path
+    do
+        systemctl stop "$unit" >/dev/null 2>&1 || :
+        active_state=$(systemctl show --property=ActiveState --value "$unit" 2>/dev/null || :)
+        case "$active_state" in inactive|failed) ;; *) fail "service did not stop safely: $unit" ;; esac
+    done
+}
+
+wait_for_installed_health() {
+    expected_version=$1
+    expected_commit=$2
+    status_destination=$3
+    expected_schema_minimum=$4
+    expected_schema_current=$5
+    health_ready=0
+    for attempt in 1 2 3 4
+    do
+        if timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json" >"$status_destination" 2>"${status_destination}.error" && \
+            grep -Fqx "running_version=$expected_version" "$status_destination" && \
+            grep -Fqx "running_commit=$expected_commit" "$status_destination" && \
+            grep -Fqx 'controller=ready' "$status_destination" && \
+            grep -Fqx 'runner=ready' "$status_destination" && \
+            grep -Fqx 'board=ready' "$status_destination" && \
+            grep -Fqx 'maintenance=safe' "$status_destination"
+        then health_ready=1; break; fi
+        sleep 1
+    done
+    [ "$health_ready" -eq 1 ] || return 1
+    if grep -Fqx 'file|remove|/etc/systemd/system/lifepowerctl-poweroff.path|root|root|0644' "$INSTALL_ROOT/install-manifest"; then
+        [ "$(systemctl is-enabled lifepowerctl-poweroff.path 2>/dev/null || :)" = enabled ] || return 1
+        systemctl is-active --quiet lifepowerctl-poweroff.path || return 1
+    fi
+    reported_revision=$(sed -n 's/^state_revision=//p' "$status_destination")
+    reported_schema=$(sed -n 's/^state_schema=//p' "$status_destination")
+    case "$reported_revision" in ''|*[!0-9]*) return 1 ;; esac
+    if [ -z "$reported_schema" ]; then
+        [ "$expected_schema_minimum" -eq "$expected_schema_current" ] || return 1
+        if [ "$reported_revision" -eq 0 ]; then reported_schema=0; else reported_schema=$expected_schema_current; fi
+    fi
+    case "$reported_schema" in *[!0-9]*) return 1 ;; esac
+    if [ "$reported_revision" -eq 0 ]; then [ "$reported_schema" -eq 0 ] || return 1
+    else [ "$reported_schema" -ge "$expected_schema_minimum" ] && [ "$reported_schema" -le "$expected_schema_current" ] || return 1
+    fi
+    if [ "${current_web_active-active}" = active ]; then check_web_health || return 1; fi
+    return 0
+}
+
+restore_previous_lifecycle() {
+    validate_lifecycle_recovery
+    if [ ! -d "$work_directory" ]; then
+        work_directory=$(mktemp -d '/tmp/lifepowerctl-install.XXXXXX')
+        write_lifecycle_transaction "$transaction_phase"
+    fi
+    note "Restoring LifePower Control $installed_version after an incomplete lifecycle update."
+    stop_lifecycle_services
+    install_atomic "$PREVIOUS_ROOT/lifepowerctl" "$INSTALL_ROOT/lifepowerctl" root root 0755
+    install_atomic "$PREVIOUS_ROOT/uninstall.sh" "$INSTALL_ROOT/uninstall.sh" root root 0755
+    install_atomic "$PREVIOUS_ROOT/install-manifest" "$INSTALL_ROOT/install-manifest" root root 0644
+    install_atomic "$PREVIOUS_ROOT/controller.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 0644
+    install_atomic "$PREVIOUS_ROOT/job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 0644
+    install_atomic "$PREVIOUS_ROOT/poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 0644
+    if [ -f "$PREVIOUS_ROOT/poweroff.path" ]; then
+        install_atomic "$PREVIOUS_ROOT/poweroff.path" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 0644
+    else
+        rm -f -- "$SYSTEMD_ROOT/lifepowerctl-poweroff.path"
+    fi
+    install_atomic "$PREVIOUS_ROOT/web.service" "$SYSTEMD_ROOT/lifepowerctl.service" root root 0644
+    install_atomic "$PREVIOUS_ROOT/tmpfiles.conf" "$TMPFILES_POLICY" root root 0644
+    install_atomic "$PREVIOUS_ROOT/sudoers" "$SUDOERS_POLICY" root root 0440
+    install_atomic "$PREVIOUS_ROOT/installed" "$METADATA_ROOT/installed" root root 0600
+    systemd-analyze verify "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'restored systemd policy is invalid'
+    visudo -c -f "$SUDOERS_POLICY" >/dev/null || fail 'restored sudo policy is invalid'
+    systemctl daemon-reload
+    systemctl enable lifepowerctl-job-runner.service lifepowerctl-controller.service lifepowerctl-poweroff.path >/dev/null
+    systemctl start lifepowerctl-poweroff.path
+    if [ "$web_lifecycle" = enabled ]; then systemctl enable lifepowerctl.service >/dev/null; else systemctl disable lifepowerctl.service >/dev/null 2>&1 || :; fi
+    systemctl start lifepowerctl-job-runner.service
+    systemctl start lifepowerctl-controller.service
+    if [ "$current_web_active" = active ]; then systemctl start lifepowerctl.service; else systemctl stop lifepowerctl.service >/dev/null 2>&1 || :; fi
+    wait_for_installed_health "$installed_version" "$installed_commit" "$work_directory/rollback-status" \
+        "$previous_schema_minimum" "$previous_schema_current" || fail 'restored services did not return to their previous healthy, maintenance-safe version'
+    rm -rf -- "$PREVIOUS_ROOT"
+    rm -f -- "$TRANSACTION_FILE" "$METADATA_ROOT/transaction.new" "$METADATA_ROOT/installed.new"
+    rollback_authorized=0
+    note "LifePower Control $installed_version was restored successfully."
+}
+
+validate_restore_recovery() {
+    [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'preserved-reinstall metadata directory is unsafe'
+    [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'preserved-reinstall metadata ownership or mode is unsafe'
+    [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'preserved-reinstall transaction is missing or unsafe'
+    [ "$(stat -c '%u:%g:%a' "$TRANSACTION_FILE")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'preserved-reinstall transaction ownership or mode is unsafe'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 11 ] || fail 'preserved-reinstall transaction has unexpected fields'
+    transaction_format=$(transaction_value format)
+    transaction_operation=$(transaction_value operation)
+    transaction_version=$(transaction_value version)
+    transaction_commit=$(transaction_value commit)
+    installed_version=$(transaction_value previous_version)
+    installed_commit=$(transaction_value previous_commit)
+    job_user=$(transaction_value job_user)
+    web_lifecycle=$(transaction_value web)
+    preserved_state_schema=$(transaction_value state_schema)
+    work_directory=$(transaction_value work_directory)
+    transaction_phase=$(transaction_value phase)
+    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = preserved-reinstall ] || fail 'preserved-reinstall transaction type is unsupported'
+    [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'preserved-reinstall transaction belongs to a different installer release'
+    printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'preserved-reinstall previous version is invalid'
+    printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'preserved-reinstall previous commit is invalid'
+    printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'preserved-reinstall job user is invalid'
+    case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'preserved-reinstall web lifecycle is invalid' ;; esac
+    case "$preserved_state_schema" in ''|*[!0-9]*) fail 'preserved-reinstall durable schema is invalid' ;; esac
+    case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'preserved-reinstall work directory is unsafe' ;; esac
+    case "$transaction_phase" in prepared|payload|units|started|healthy|committed) ;; *) fail 'preserved-reinstall transaction phase is invalid' ;; esac
+    for entry in $(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+    do case "$entry" in preserved|preserved.new|installed|installed.new|transaction|transaction.new) ;; *) fail "preserved-reinstall metadata contains unexpected entry: $entry" ;; esac; done
+    for transient in "$METADATA_ROOT/preserved" "$METADATA_ROOT/preserved.new"
+    do
+        if [ -e "$transient" ] || [ -L "$transient" ]; then
+            [ -f "$transient" ] && [ ! -L "$transient" ] || fail "preserved-reinstall record is unsafe: $transient"
+            [ "$(stat -c '%u:%g:%a' "$transient")" = "$ROOT_UID:$ROOT_GID:600" ] || fail "preserved-reinstall record ownership or mode is unsafe: $transient"
+            [ "$(wc -l <"$transient")" -eq 6 ] || fail "preserved-reinstall record has unexpected fields: $transient"
+            [ "$(record_value "$transient" format)" = 1 ] || fail "preserved-reinstall record format is unsupported: $transient"
+            [ "$(record_value "$transient" version)" = "$installed_version" ] && \
+                [ "$(record_value "$transient" commit)" = "$installed_commit" ] && \
+                [ "$(record_value "$transient" job_user)" = "$job_user" ] && \
+                [ "$(record_value "$transient" web)" = "$web_lifecycle" ] && \
+                [ "$(record_value "$transient" state_schema)" = "$preserved_state_schema" ] || \
+                fail "preserved-reinstall record is inconsistent with its transaction: $transient"
+        fi
+    done
+    require_owned_directory "$CONFIG_ROOT" root "$SERVICE_GROUP" 750
+    require_owned_directory "$STATE_ROOT" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$STATE_ROOT/activity" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$JOBS_ROOT" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$JOBS_ROOT/output" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_file "$CONFIG_ROOT/config.json" root "$SERVICE_GROUP" 640
+    if [ -e "$work_directory" ] || [ -L "$work_directory" ]; then
+        [ -d "$work_directory" ] && [ ! -L "$work_directory" ] || fail 'preserved-reinstall work directory is unsafe'
+        [ "$(stat -c '%u:%g:%a' "$work_directory")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'preserved-reinstall work-directory ownership or mode is unsafe'
+    fi
+    for path in "$INSTALL_ROOT" "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT"
+    do validate_managed_directory "$path"; done
+    for path in "$SYSTEMD_ROOT/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$TMPFILES_POLICY" "$SUDOERS_POLICY"
+    do validate_managed_file "$path"; done
+}
+
+rollback_preserved_reinstall() {
+    validate_restore_recovery
+    note 'Rolling back the incomplete reinstall while retaining preserved application data.'
+    for unit in lifepowerctl.service lifepowerctl-controller.service lifepowerctl-job-runner.service lifepowerctl-poweroff.path
+    do
+        if [ -f "$SYSTEMD_ROOT/$unit" ]; then
+            systemctl stop "$unit" >/dev/null 2>&1 || :
+            systemctl disable "$unit" >/dev/null 2>&1 || :
+        fi
+    done
+    rm -f -- "$SYSTEMD_ROOT/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY" \
+        "$INSTALL_ROOT/lifepowerctl" "$INSTALL_ROOT/uninstall.sh" "$INSTALL_ROOT/install-manifest"
+    if [ -d "$INSTALL_ROOT" ]; then rmdir "$INSTALL_ROOT"; fi
+    if [ -d "$RUNTIME_ROOT" ]; then rmdir "$RUNTIME_ROOT"; fi
+    if [ -d "$POWER_RUNTIME_ROOT" ]; then rmdir "$POWER_RUNTIME_ROOT"; fi
+    systemctl daemon-reload
+    if [ ! -f "$METADATA_ROOT/preserved" ]; then
+        printf '%s\n' 'format=1' "version=$installed_version" "commit=$installed_commit" \
+            "job_user=$job_user" "web=$web_lifecycle" "state_schema=$preserved_state_schema" >"$METADATA_ROOT/preserved.new"
+        chmod 0600 "$METADATA_ROOT/preserved.new"
+        mv -f -- "$METADATA_ROOT/preserved.new" "$METADATA_ROOT/preserved"
+    fi
+    rm -f -- "$METADATA_ROOT/installed" "$METADATA_ROOT/installed.new" "$TRANSACTION_FILE" "$METADATA_ROOT/transaction.new"
+    rollback_authorized=0
+    note 'Preserved-data reinstall rollback completed.'
+}
+
+recover_install() {
+    [ "$(id -u)" -eq 0 ] || fail 'root is required for recovery'
+    if [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ]; then
+        transaction_operation=$(transaction_value operation)
+        case "$transaction_operation" in
+            fresh-install) recover_fresh ;;
+            lifecycle-update) restore_previous_lifecycle; safe_remove_work; note 'Interrupted lifecycle update recovered.' ;;
+            preserved-reinstall) rollback_preserved_reinstall; safe_remove_work; note 'Interrupted preserved-data reinstall recovered.' ;;
+            *) fail 'transaction operation is unsupported' ;;
+        esac
+        return 0
+    fi
+    if [ -f "$METADATA_ROOT/installed" ] && [ ! -L "$METADATA_ROOT/installed" ] && \
+        { [ -e "$PREVIOUS_ROOT" ] || [ -e "${PREVIOUS_ROOT}.new" ] || [ -L "$PREVIOUS_ROOT" ] || [ -L "${PREVIOUS_ROOT}.new" ]; }
+    then
+        [ -d "$METADATA_ROOT" ] && [ ! -L "$METADATA_ROOT" ] || fail 'installer metadata directory is unsafe'
+        [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'installer metadata ownership or mode is unsafe'
+        metadata_entries=$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n' | sort)
+        for entry in $metadata_entries
+        do case "$entry" in installed|previous|previous.new|transaction.new) ;; *) fail "installer metadata contains unexpected entry: $entry" ;; esac; done
+        for staging in "$PREVIOUS_ROOT" "${PREVIOUS_ROOT}.new"
+        do
+            if [ -e "$staging" ] || [ -L "$staging" ]; then
+                [ -d "$staging" ] && [ ! -L "$staging" ] || fail "previous-payload staging path is unsafe: $staging"
+                [ "$(stat -c '%u:%g:%a' "$staging")" = "$ROOT_UID:$ROOT_GID:700" ] || fail "previous-payload staging ownership or mode is unsafe: $staging"
+            fi
+        done
+        if [ -e "$METADATA_ROOT/transaction.new" ] || [ -L "$METADATA_ROOT/transaction.new" ]; then
+            [ -f "$METADATA_ROOT/transaction.new" ] && [ ! -L "$METADATA_ROOT/transaction.new" ] || fail 'lifecycle transaction staging marker is unsafe'
+            [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT/transaction.new")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'lifecycle transaction staging ownership or mode is unsafe'
+        fi
+        rm -rf -- "$PREVIOUS_ROOT" "${PREVIOUS_ROOT}.new"
+        rm -f -- "$METADATA_ROOT/transaction.new"
+        note 'Removed previous-payload staging left before lifecycle mutation.'
+        return 0
+    fi
+    recover_fresh
+}
+
+cleanup() {
+    status=$1
+    trap - EXIT HUP INT TERM
+    if [ "$status" -ne 0 ] && [ "${install_complete-0}" -eq 0 ]; then
+        case "${rollback_kind-}:${rollback_authorized-0}" in
+            lifecycle:1) restore_previous_lifecycle ;;
+            restore:1) rollback_preserved_reinstall ;;
+            *) rollback_fresh ;;
+        esac
+        if [ "${lifecycle_backup_started-0}" -eq 1 ] && [ "${rollback_authorized-0}" -eq 0 ]; then
+            rm -rf -- "$PREVIOUS_ROOT" "${PREVIOUS_ROOT}.new"
+            rm -f -- "$TRANSACTION_FILE" "$METADATA_ROOT/transaction.new"
+        fi
+    fi
+    safe_remove_work
+    exit "$status"
+}
+
+download() {
+    source_url=$1
+    destination=$2
+    maximum_bytes=$3
+    file_blocks=$4
+    deadline=$5
+    partial="${destination}.part"
+    if have wget; then
+        (ulimit -f "$file_blocks"; timeout "$deadline" wget -q --max-redirect=10 -O "$partial" "$source_url") || fail "download failed or exceeded its bound: $source_url"
+    else
+        (ulimit -f "$file_blocks"; timeout "$deadline" curl --fail --location --silent --show-error --max-redirs 10 --output "$partial" "$source_url") || fail "download failed or exceeded its bound: $source_url"
+    fi
+    [ -s "$partial" ] || fail "download was empty: $source_url"
+    downloaded_bytes=$(wc -c <"$partial")
+    [ "$downloaded_bytes" -le "$maximum_bytes" ] || fail "download exceeded its byte bound: $source_url"
+    mv -- "$partial" "$destination"
+}
+
+require_line_once() {
+    line_source=$1
+    expected_line=$2
+    description=$3
+    matches=$(printf '%s\n' "$line_source" | grep -Fxc -- "$expected_line" || :)
+    [ "$matches" -eq 1 ] || fail "$description must contain exactly one line: $expected_line"
+}
+
+require_machine_metadata_shape() {
+    machine_metadata=$1
+    description=$2
+    [ "$(printf '%s\n' "$machine_metadata" | wc -l)" -eq 10 ] || fail "$description has unexpected fields"
+    runtime_fields=$(printf '%s\n' "$machine_metadata" | grep -Ec '^go=go[0-9][0-9A-Za-z.+-]{0,62}$' || :)
+    [ "$runtime_fields" -eq 1 ] || fail "$description has an invalid or duplicated Go runtime field"
+}
+
+render_asset() {
+    "$1" | sed -e "s|@JOB_USER@|$job_user|g" -e "s|@JOB_UID@|$job_uid|g" \
+        -e "s|@JOB_GROUP@|$job_group|g" -e "s|@JOB_HOME@|$job_home|g" \
+        -e "s|@CONTROLLER_UID@|$controller_uid|g" >"$2"
+    grep -Eq '@(JOB|CONTROLLER)_' "$2" && fail "unresolved policy token in $2"
+    return 0
+}
+
+install_atomic() {
+    temporary_destination="${2}.lifepowerctl-new"
+    install -o "$3" -g "$4" -m "$5" "$1" "$temporary_destination"
+    mv -f -- "$temporary_destination" "$2"
+}
+
+require_fresh_path() {
+    [ ! -L "$1" ] || fail "managed path is a symlink: $1"
+    [ ! -e "$1" ] || fail "existing installation or path collision at $1; fresh install made no changes"
+}
+
+require_safe_system_ancestor() {
+    [ -d "$1" ] && [ ! -L "$1" ] || fail "system destination ancestor is missing or unsafe: $1"
+    [ "$(stat -c '%u:%g' "$1")" = "$ROOT_UID:$ROOT_GID" ] || fail "system destination ancestor must be owned by root:root: $1"
+    ancestor_mode=$(stat -c '%a' "$1")
+    case "$ancestor_mode" in ''|*[!0-7]*) fail "system destination ancestor has an invalid mode: $1" ;; esac
+    [ "$((0$ancestor_mode & 0022))" -eq 0 ] || fail "system destination ancestor is group- or other-writable: $1"
+}
+
+check_system_ancestors() {
+    for path in / /etc /etc/systemd /etc/systemd/system /etc/tmpfiles.d /etc/sudoers.d \
+        /usr /usr/lib /usr/local /usr/local/bin /var /var/lib /run
+    do require_safe_system_ancestor "$path"; done
+}
+
+check_fresh_destinations() {
+    getent passwd "$SERVICE_USER" >/dev/null 2>&1 && fail "account collision: $SERVICE_USER already exists"
+    getent group "$SERVICE_GROUP" >/dev/null 2>&1 && fail "group collision: $SERVICE_GROUP already exists"
+    getent group "$JOBS_GROUP" >/dev/null 2>&1 && fail "group collision: $JOBS_GROUP already exists"
+    if [ -e "$TRANSACTION_FILE" ] || [ -L "$TRANSACTION_FILE" ]; then
+        fail 'an interrupted fresh install is recorded; inspect it, then run this exact saved installer with --recover'
+    fi
+    for path in "$INSTALL_ROOT" "$CONFIG_ROOT" "$STATE_ROOT" "$JOBS_ROOT" "$METADATA_ROOT" "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT" \
+        "$SYSTEMD_ROOT/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY"
+    do require_fresh_path "$path"; done
+    if ss -H -ltn 'sport = :8080' | grep -q .; then fail 'TCP port 8080 is already listening'; fi
+}
+
+require_owned_file() {
+    [ -f "$1" ] && [ ! -L "$1" ] || fail "installed file is missing or unsafe: $1"
+    [ "$(stat -c '%U:%G:%a' "$1")" = "$2:$3:$4" ] || fail "installed file ownership or mode is unexpected: $1"
+}
+
+require_owned_directory() {
+    [ -d "$1" ] && [ ! -L "$1" ] || fail "installed directory is missing or unsafe: $1"
+    [ "$(stat -c '%U:%G:%a' "$1")" = "$2:$3:$4" ] || fail "installed directory ownership or mode is unexpected: $1"
+}
+
+check_existing_destinations() {
+    service_group_line=$(getent group "$SERVICE_GROUP") || fail "installed group is missing: $SERVICE_GROUP"
+    jobs_group_line=$(getent group "$JOBS_GROUP") || fail "installed group is missing: $JOBS_GROUP"
+    service_user_line=$(getent passwd "$SERVICE_USER") || fail "installed account is missing: $SERVICE_USER"
+    service_gid=$(printf '%s\n' "$service_group_line" | cut -d: -f3)
+    service_members=$(printf '%s\n' "$service_group_line" | cut -d: -f4)
+    [ -z "$service_members" ] || fail 'installed service group has an unexpected supplementary member'
+    other_primary=$(getent passwd | awk -F: -v gid="$service_gid" '$4 == gid && $1 != "lifepowerctl" { print $1; exit }')
+    [ -z "$other_primary" ] || fail "installed service group is used as a primary group by: $other_primary"
+    expected_service_line=$(printf '%s\n' "$service_user_line" | awk -F: -v gid="$service_gid" -v home="$STATE_ROOT" \
+        '$1 == "lifepowerctl" && $3 > 0 && $3 < 1000 && $4 == gid && $6 == home && $7 == "/usr/sbin/nologin" { print "yes" }')
+    [ "$expected_service_line" = yes ] || fail 'installed service-account definition is incompatible'
+    jobs_members=$(printf '%s\n' "$jobs_group_line" | cut -d: -f4)
+    jobs_gid=$(printf '%s\n' "$jobs_group_line" | cut -d: -f3)
+    jobs_primary=$(getent passwd | awk -F: -v gid="$jobs_gid" '$4 == gid { print $1; exit }')
+    [ -z "$jobs_primary" ] || fail "installed jobs group is used as a primary group by: $jobs_primary"
+    for required_member in "$SERVICE_USER" "$job_user"
+    do
+        case ",$jobs_members," in *",$required_member,"*) ;; *) fail "installed jobs group is missing member: $required_member" ;; esac
+    done
+    old_ifs=$IFS; IFS=,
+    for member in $jobs_members
+    do
+        [ "$member" = "$SERVICE_USER" ] || [ "$member" = "$job_user" ] || fail "installed jobs group has unexpected member: $member"
+    done
+    IFS=$old_ifs
+    service_groups=$(id -nG "$SERVICE_USER")
+    for required_group in "$SERVICE_GROUP" "$JOBS_GROUP" i2c
+    do case " $service_groups " in *" $required_group "*) ;; *) fail "installed service account is missing group: $required_group" ;; esac; done
+    for service_group in $service_groups
+    do
+        [ "$service_group" = "$SERVICE_GROUP" ] || [ "$service_group" = "$JOBS_GROUP" ] || [ "$service_group" = i2c ] || fail "installed service account has unexpected group: $service_group"
+    done
+
+    require_owned_directory "$INSTALL_ROOT" root root 755
+    require_owned_directory "$CONFIG_ROOT" root "$SERVICE_GROUP" 750
+    require_owned_directory "$STATE_ROOT" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$STATE_ROOT/activity" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$JOBS_ROOT" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$JOBS_ROOT/output" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$RUNTIME_ROOT" "$job_user" "$JOBS_GROUP" 2770
+    require_owned_directory "$POWER_RUNTIME_ROOT" root "$SERVICE_GROUP" 730
+    require_owned_file "$INSTALL_ROOT/lifepowerctl" root root 755
+    require_owned_file "$INSTALL_ROOT/uninstall.sh" root root 755
+    require_owned_file "$INSTALL_ROOT/install-manifest" root root 644
+    require_owned_file "$CONFIG_ROOT/config.json" root "$SERVICE_GROUP" 640
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 644
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 644
+    current_has_poweroff_path=0
+    if grep -Fqx 'file|remove|/etc/systemd/system/lifepowerctl-poweroff.path|root|root|0644' "$INSTALL_ROOT/install-manifest"; then
+        require_owned_file "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 644
+        current_has_poweroff_path=1
+    else
+        [ ! -e "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" ] && [ ! -L "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" ] || fail 'legacy installation has an unowned poweroff path unit'
+    fi
+    require_owned_file "$SYSTEMD_ROOT/lifepowerctl.service" root root 644
+    require_owned_file "$TMPFILES_POLICY" root root 644
+    require_owned_file "$SUDOERS_POLICY" root root 440
+    visudo -c -f "$SUDOERS_POLICY" >/dev/null || fail 'installed sudo policy is invalid'
+    if [ "$current_has_poweroff_path" -eq 1 ]; then
+        systemd-analyze verify "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+            "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'installed systemd policy is invalid'
+    else
+        systemd-analyze verify "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+            "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'installed systemd policy is invalid'
+    fi
+}
+
+check_preserved_destinations() {
+    service_group_line=$(getent group "$SERVICE_GROUP") || fail "preserved service group is missing: $SERVICE_GROUP"
+    jobs_group_line=$(getent group "$JOBS_GROUP") || fail "preserved jobs group is missing: $JOBS_GROUP"
+    service_user_line=$(getent passwd "$SERVICE_USER") || fail "preserved service account is missing: $SERVICE_USER"
+    service_gid=$(printf '%s\n' "$service_group_line" | cut -d: -f3)
+    [ -z "$(printf '%s\n' "$service_group_line" | cut -d: -f4)" ] || fail 'preserved service group has an unexpected supplementary member'
+    [ -z "$(getent passwd | awk -F: -v gid="$service_gid" '$4 == gid && $1 != "lifepowerctl" { print $1; exit }')" ] || fail 'preserved service group is used by another primary account'
+    expected_service_line=$(printf '%s\n' "$service_user_line" | awk -F: -v gid="$service_gid" -v home="$STATE_ROOT" \
+        '$1 == "lifepowerctl" && $3 > 0 && $3 < 1000 && $4 == gid && $6 == home && $7 == "/usr/sbin/nologin" { print "yes" }')
+    [ "$expected_service_line" = yes ] || fail 'preserved service-account definition is incompatible'
+    jobs_gid=$(printf '%s\n' "$jobs_group_line" | cut -d: -f3)
+    [ -z "$(getent passwd | awk -F: -v gid="$jobs_gid" '$4 == gid { print $1; exit }')" ] || fail 'preserved jobs group is used as a primary group'
+    jobs_members=$(printf '%s\n' "$jobs_group_line" | cut -d: -f4)
+    for required_member in "$SERVICE_USER" "$job_user"
+    do case ",$jobs_members," in *",$required_member,"*) ;; *) fail "preserved jobs group is missing member: $required_member" ;; esac; done
+    old_ifs=$IFS; IFS=,
+    for member in $jobs_members
+    do [ "$member" = "$SERVICE_USER" ] || [ "$member" = "$job_user" ] || fail "preserved jobs group has unexpected member: $member"; done
+    IFS=$old_ifs
+    service_groups=$(id -nG "$SERVICE_USER")
+    for required_group in "$SERVICE_GROUP" "$JOBS_GROUP" i2c
+    do case " $service_groups " in *" $required_group "*) ;; *) fail "preserved service account is missing group: $required_group" ;; esac; done
+    for service_group in $service_groups
+    do [ "$service_group" = "$SERVICE_GROUP" ] || [ "$service_group" = "$JOBS_GROUP" ] || [ "$service_group" = i2c ] || fail "preserved service account has unexpected group: $service_group"; done
+
+    require_owned_directory "$CONFIG_ROOT" root "$SERVICE_GROUP" 750
+    require_owned_directory "$STATE_ROOT" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$STATE_ROOT/activity" "$SERVICE_USER" "$SERVICE_GROUP" 700
+    require_owned_directory "$JOBS_ROOT" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_directory "$JOBS_ROOT/output" "$job_user" "$JOBS_GROUP" 2750
+    require_owned_file "$CONFIG_ROOT/config.json" root "$SERVICE_GROUP" 640
+    for path in "$INSTALL_ROOT" "$RUNTIME_ROOT" "$POWER_RUNTIME_ROOT" \
+        "$SYSTEMD_ROOT/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$TMPFILES_POLICY" "$SUDOERS_POLICY"
+    do [ ! -e "$path" ] && [ ! -L "$path" ] || fail "preserved reinstall found unexpected package machinery: $path"; done
+    if ss -H -ltn 'sport = :8080' | grep -q .; then fail 'TCP port 8080 is already listening'; fi
+}
+
+check_web_health() {
+    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null http://127.0.0.1:8080/healthz
+    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null http://127.0.0.1:8080/healthz
+    fi
+}
+
+read_current_installation() {
+    current_machine=$(timeout 10 "$INSTALL_ROOT/lifepowerctl" version --machine) || fail 'installed executable cannot report machine metadata within 10 seconds'
+    require_machine_metadata_shape "$current_machine" 'installed executable metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "version=$installed_version" "commit=$installed_commit" \
+        'source_state=clean' 'target_os=linux' 'target_arch=arm64'
+    do require_line_once "$current_machine" "$expected" 'installed executable metadata'; done
+    previous_schema_current=$(printf '%s\n' "$current_machine" | sed -n 's/^state_schema_current=//p')
+    previous_schema_minimum=$(printf '%s\n' "$current_machine" | sed -n 's/^state_schema_min_readable=//p')
+    case "$previous_schema_current:$previous_schema_minimum" in *[!0-9:]*|:*|*:|*:*:*) fail 'installed executable schema metadata is invalid' ;; esac
+    [ "$previous_schema_current" -ge 1 ] && [ "$previous_schema_minimum" -ge 1 ] && [ "$previous_schema_minimum" -le "$previous_schema_current" ] || fail 'installed executable schema range is invalid'
+    current_uninstall=$(timeout 5 /bin/sh "$INSTALL_ROOT/uninstall.sh" --release-info) || fail 'installed uninstaller cannot report release metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "repository=$REPOSITORY" "version=$installed_version" "commit=$installed_commit"
+    do require_line_once "$current_uninstall" "$expected" 'installed uninstaller metadata'; done
+
+    current_status=$(timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json") || fail 'installed services cannot report bounded local status'
+    for expected in 'format=1' 'product=lifepowerctl' "running_version=$installed_version" "running_commit=$installed_commit" \
+        'controller=ready' 'runner=ready' 'board=ready' 'jobs=idle' 'maintenance=safe'
+    do require_line_once "$current_status" "$expected" 'installed service status'; done
+    current_state_revision=$(printf '%s\n' "$current_status" | sed -n 's/^state_revision=//p')
+    current_state_schema=$(printf '%s\n' "$current_status" | sed -n 's/^state_schema=//p')
+    current_status_lines=$(printf '%s\n' "$current_status" | wc -l)
+    if [ -z "$current_state_schema" ]; then [ "$current_status_lines" -eq 19 ] || fail 'installed legacy service status has unexpected fields'
+    else [ "$current_status_lines" -eq 20 ] || fail 'installed service status has unexpected fields'
+    fi
+    case "$current_state_revision" in ''|*[!0-9]*) fail 'installed service state revision is invalid' ;; esac
+    if [ -z "$current_state_schema" ]; then
+        [ "$previous_schema_minimum" -eq "$previous_schema_current" ] || fail 'installed service does not expose its durable schema and its binary range is ambiguous'
+        if [ "$current_state_revision" -eq 0 ]; then current_state_schema=0; else current_state_schema=$previous_schema_current; fi
+        note "Legacy status inferred durable schema $current_state_schema from the installed singleton schema range."
+    fi
+    case "$current_state_schema" in *[!0-9]*) fail 'installed durable state schema is invalid' ;; esac
+    if [ "$current_state_revision" -eq 0 ]; then
+        [ "$current_state_schema" -eq 0 ] || fail 'installed durable schema contradicts an empty state revision'
+    else
+        [ "$current_state_schema" -ge "$previous_schema_minimum" ] && [ "$current_state_schema" -le "$previous_schema_current" ] || fail 'installed durable schema is outside the installed binary range'
+    fi
+    [ "$(systemctl is-enabled lifepowerctl-controller.service)" = enabled ] || fail 'installed controller service is not enabled'
+    [ "$(systemctl is-enabled lifepowerctl-job-runner.service)" = enabled ] || fail 'installed job runner service is not enabled'
+    if [ "$current_has_poweroff_path" -eq 1 ]; then
+        [ "$(systemctl is-enabled lifepowerctl-poweroff.path)" = enabled ] || fail 'installed poweroff admission path is not enabled'
+    fi
+    systemctl is-active --quiet lifepowerctl-controller.service || fail 'installed controller service is not active'
+    systemctl is-active --quiet lifepowerctl-job-runner.service || fail 'installed job runner service is not active'
+    if [ "$current_has_poweroff_path" -eq 1 ]; then
+        systemctl is-active --quiet lifepowerctl-poweroff.path || fail 'installed poweroff admission path is not active'
+    fi
+    current_web_active=$(systemctl is-active lifepowerctl.service 2>/dev/null || :)
+    case "$current_web_active" in active|inactive) ;; *) fail "installed web service activity is unsafe or unknown: $current_web_active" ;; esac
+    current_web_enabled=$(systemctl is-enabled lifepowerctl.service 2>/dev/null || :)
+    case "$installed_web:$current_web_enabled" in enabled:enabled|on-demand:disabled) ;; *) fail 'installed web lifecycle does not match its root-only record' ;; esac
+    if [ "$installed_web" = enabled ]; then [ "$current_web_active" = active ] || fail 'enabled web service is not active'; fi
+    if [ "$current_web_active" = active ]; then check_web_health || fail 'installed web health endpoint is unavailable'; fi
+}
+
+check_account_authority() {
+    authority='none detected'
+    groups_line=$(id -nG "$job_user")
+    case " $groups_line " in *' i2c '*) authority='i2c group membership' ;; esac
+    sudo_listing=$(sudo -l -U "$job_user" 2>/dev/null || :)
+    if printf '%s\n' "$sudo_listing" | grep -Eq '^[[:space:]]*\(' || printf '%s\n' " $groups_line " | grep -Eq ' (sudo|admin) '; then
+        case "$authority" in 'none detected') authority='sudo authorization' ;; *) authority="$authority and sudo authorization" ;; esac
+    fi
+    note "Selected job user: $job_user (uid $job_uid, primary group $job_group)"
+    note "Selected home/shell: $job_home / $job_shell"
+    note "Existing elevated authority: $authority"
+    if [ "$authority" != 'none detected' ] && [ "$accept_authority" -ne 1 ]; then
+        [ "$non_interactive" -eq 0 ] || fail 'selected job user has existing authority; add --accept-existing-authority after review'
+    fi
+}
+
+preflight() {
+    [ "$(id -u)" -eq 0 ] || fail 'root is required; inspect the saved script, then run sudo sh ./install.sh'
+    [ -r /etc/os-release ] || fail '/etc/os-release is missing'
+    os_id=$(sed -n 's/^ID=//p' /etc/os-release | tr -d '"' | head -n 1)
+    os_version=$(sed -n 's/^VERSION_ID=//p' /etc/os-release | tr -d '"' | head -n 1)
+    case "$os_id:$os_version" in
+        raspbian:12|raspbian:13) ;;
+        debian:12|debian:13)
+            if [ -r /etc/rpi-issue ]; then
+                :
+            elif [ "$development_host" -eq 1 ]; then
+                note "Development-host exception accepted for Debian $os_version; this is not release acceptance evidence."
+            else
+                fail "generic Debian $os_version is not a supported production image; Raspberry Pi OS 12 or 13 is required"
+            fi
+            ;;
+        *) fail "unsupported OS $os_id $os_version; Raspberry Pi OS 12 or 13 is required" ;;
+    esac
+    [ -d /run/systemd/system ] || fail 'systemd is not running'
+    [ "$(dpkg --print-architecture)" = arm64 ] || fail 'native user-space architecture is not arm64'
+    case "$(uname -m)" in aarch64|arm64) ;; *) fail 'kernel architecture is not ARM64' ;; esac
+    note "Detected platform: $os_id $os_version, native arm64, kernel $(uname -m)"
+    for tool in awk cut diff dpkg find getent grep gzip head id install mktemp mv rm rmdir runuser sed sha256sum sleep sort stat sudo systemctl systemd-analyze systemd-tmpfiles tar timeout tr useradd userdel groupadd groupdel usermod gpasswd ss visudo wc
+    do have "$tool" || fail "required tool is missing: $tool"; done
+    if ! have wget && ! have curl; then fail 'wget or curl is required'; fi
+    check_system_ancestors
+
+    printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'job user has an unsafe or unsupported name'
+    passwd_line=$(getent passwd "$job_user") || fail "job user does not exist: $job_user"
+    job_uid=$(printf '%s\n' "$passwd_line" | cut -d: -f3)
+    job_gid=$(printf '%s\n' "$passwd_line" | cut -d: -f4)
+    job_home=$(printf '%s\n' "$passwd_line" | cut -d: -f6)
+    job_shell=$(printf '%s\n' "$passwd_line" | cut -d: -f7)
+    printf '%s\n' "$job_uid:$job_gid" | grep -Eq '^[0-9]+:[0-9]+$' || fail 'job-user numeric identity is invalid'
+    [ "$job_uid" -ge 1000 ] && [ "$job_uid" -ne 65534 ] || fail 'job user must be a regular non-root account'
+    job_group=$(getent group "$job_gid" | cut -d: -f1)
+    [ -n "$job_group" ] || fail 'job-user primary group is unavailable'
+    printf '%s\n' "$job_group" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'job-user primary group is unsafe'
+    printf '%s\n' "$job_home" | grep -Eq '^/[A-Za-z0-9_./-]+$' || fail 'job-user home path is unsafe or unsupported'
+    case "$job_home" in */../*|*/..|*/./*|*/.) fail 'job-user home path contains a relative component' ;; esac
+    [ -d "$job_home" ] && [ ! -L "$job_home" ] || fail "job-user home is missing or a symlink: $job_home"
+    case "$job_shell" in */false|*/nologin|'') fail 'job user does not have an interactive login shell' ;; esac
+    [ -x "$job_shell" ] || fail "job-user login shell is not executable: $job_shell"
+    check_account_authority
+
+    case "$installation_action" in
+        fresh) check_fresh_destinations ;;
+        restore) check_preserved_destinations ;;
+        *) check_existing_destinations ;;
+    esac
+
+    [ -x /usr/local/bin/lifepo4wered-cli ] && [ ! -L /usr/local/bin/lifepo4wered-cli ] || fail 'vendor CLI prerequisite is missing or unsafe'
+    [ "$(stat -c '%U:%G' /usr/local/bin/lifepo4wered-cli)" = root:root ] || fail 'vendor CLI must be owned by root:root'
+    vendor_mode=$(stat -c '%a' /usr/local/bin/lifepo4wered-cli)
+    printf '%s\n' "$vendor_mode" | grep -Eq '^[0157][0145][0145]$' || fail 'vendor CLI has unsafe write or special-bit permissions'
+    systemctl is-active --quiet lifepo4wered-daemon.service || fail 'vendor daemon is not active: lifepo4wered-daemon.service'
+    [ -c /dev/i2c-1 ] && [ ! -L /dev/i2c-1 ] || fail '/dev/i2c-1 is missing or is not a character device'
+    [ "$(stat -c '%G:%a' /dev/i2c-1)" = i2c:660 ] || fail '/dev/i2c-1 must be group i2c and mode 0660'
+    getent group i2c >/dev/null || fail 'i2c group is missing'
+    available_kb=$(df -Pk /usr /etc /var | awk 'NR > 1 { if (minimum == 0 || $4 < minimum) minimum=$4 } END { print minimum+0 }')
+    [ "$available_kb" -ge 131072 ] || fail 'at least 128 MiB free space is required on /usr, /etc, and /var filesystems'
+    if [ "$installation_action" != fresh ] && [ "$installation_action" != restore ]; then read_current_installation; fi
+    note "Lifecycle action: $installation_action"
+}
+
+acquire_and_validate() {
+    note "Downloading exact ${RELEASE_VERSION} assets before changing the system..."
+    download "${RELEASE_BASE_URL}/${CHECKSUM_ASSET}" "$work_directory/$CHECKSUM_ASSET" 1048576 2048 30
+    download "${RELEASE_BASE_URL}/${RELEASE_ARCHIVE}" "$work_directory/$RELEASE_ARCHIVE" 33554432 65536 120
+    download "${RELEASE_BASE_URL}/${UNINSTALL_ASSET}" "$work_directory/$UNINSTALL_ASSET" 1048576 2048 30
+    [ "$(wc -c <"$work_directory/$CHECKSUM_ASSET")" -le 1048576 ] || fail 'checksum manifest exceeds 1 MiB'
+    [ "$(wc -c <"$work_directory/$RELEASE_ARCHIVE")" -le 33554432 ] || fail 'compressed archive exceeds 32 MiB'
+    [ "$(wc -c <"$work_directory/$UNINSTALL_ASSET")" -le 1048576 ] || fail 'uninstaller exceeds 1 MiB'
+    for asset in "$RELEASE_ARCHIVE" "$UNINSTALL_ASSET"
+    do
+        expected_hash=$(awk -v name="$asset" '$2 == name { count++; if (length($1) == 64 && $1 !~ /[^0-9a-f]/) hash=$1; else invalid=1 } END { if (count == 1 && !invalid) print hash }' "$work_directory/$CHECKSUM_ASSET")
+        [ -n "$expected_hash" ] || fail "checksum manifest must contain exactly one valid entry for $asset"
+        actual_hash=$(sha256sum "$work_directory/$asset" | cut -d' ' -f1)
+        [ "$actual_hash" = "$expected_hash" ] || fail "checksum mismatch for $asset"
+    done
+    /bin/sh -n "$work_directory/$UNINSTALL_ASSET" || fail 'downloaded uninstaller has invalid shell syntax'
+    uninstall_info=$(timeout 5 /bin/sh "$work_directory/$UNINSTALL_ASSET" --release-info) || fail 'downloaded uninstaller cannot report release metadata within 5 seconds'
+    printf '%s\n' 'format=1' 'product=lifepowerctl' "repository=$REPOSITORY" "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" >"$work_directory/expected-uninstaller-info"
+    printf '%s\n' "$uninstall_info" >"$work_directory/uninstaller-info"
+    diff -u "$work_directory/expected-uninstaller-info" "$work_directory/uninstaller-info" >/dev/null || fail 'downloaded uninstaller metadata is not exact'
+
+    timeout 30 tar -tzf "$work_directory/$RELEASE_ARCHIVE" >"$work_directory/members" || fail 'archive member listing failed or timed out'
+    printf '%s\n' 'lifepowerctl/' 'lifepowerctl/LICENSE' 'lifepowerctl/README.md' \
+        'lifepowerctl/lifepowerctl' 'lifepowerctl/release-manifest.txt' >"$work_directory/expected-members"
+    diff -u "$work_directory/expected-members" "$work_directory/members" >/dev/null || fail 'archive member list is not the exact release allowlist'
+    timeout 30 tar -tvzf "$work_directory/$RELEASE_ARCHIVE" >"$work_directory/member-types" || fail 'archive type inspection failed or timed out'
+    awk 'substr($1,1,1) != "d" && substr($1,1,1) != "-" { exit 1 }' "$work_directory/member-types" || fail 'archive contains a non-file member'
+    awk '
+        $NF == "lifepowerctl/lifepowerctl" && $3 > 25165824 { exit 1 }
+        ($NF == "lifepowerctl/LICENSE" || $NF == "lifepowerctl/README.md" || $NF == "lifepowerctl/release-manifest.txt") && $3 > 1048576 { exit 1 }
+    ' "$work_directory/member-types" || fail 'archive declares an oversized payload member'
+    mkdir "$work_directory/extract"
+    timeout 30 tar --no-same-owner --no-same-permissions -xzf "$work_directory/$RELEASE_ARCHIVE" -C "$work_directory/extract" || fail 'archive extraction failed or timed out'
+    payload="$work_directory/extract/lifepowerctl"
+    [ -d "$payload" ] && [ ! -L "$payload" ] || fail 'extracted payload directory is invalid'
+    for file in LICENSE README.md lifepowerctl release-manifest.txt
+    do [ -f "$payload/$file" ] && [ ! -L "$payload/$file" ] || fail "extracted payload file is invalid: $file"; done
+    [ "$(wc -c <"$payload/lifepowerctl")" -le 25165824 ] || fail 'executable exceeds 24 MiB'
+    for file in LICENSE README.md release-manifest.txt
+    do [ "$(wc -c <"$payload/$file")" -le 1048576 ] || fail "$file exceeds 1 MiB"; done
+    chmod 0755 "$payload/lifepowerctl"
+    machine_info=$(timeout 10 "$payload/lifepowerctl" version --machine) || fail 'staged executable cannot report machine metadata within 10 seconds'
+    require_machine_metadata_shape "$machine_info" 'staged executable metadata'
+    for expected in 'format=1' 'product=lifepowerctl' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        'source_state=clean' 'target_os=linux' 'target_arch=arm64'
+    do require_line_once "$machine_info" "$expected" 'staged executable metadata'; done
+    state_schema=$(printf '%s\n' "$machine_info" | sed -n 's/^state_schema_current=//p')
+    minimum_schema=$(printf '%s\n' "$machine_info" | sed -n 's/^state_schema_min_readable=//p')
+    case "$state_schema:$minimum_schema" in *[!0-9:]*|:*|*:|*:*:*) fail 'staged executable schema metadata is invalid' ;; esac
+    [ "$state_schema" -ge 1 ] && [ "$minimum_schema" -ge 1 ] && [ "$minimum_schema" -le "$state_schema" ] || fail 'staged executable schema range is invalid'
+    printf '%s\n' 'format=1' 'product=lifepowerctl' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        'source_state=clean' 'target_os=linux' 'target_arch=arm64' \
+        "state_schema_current=$state_schema" "state_schema_min_readable=$minimum_schema" >"$work_directory/expected-release-manifest"
+    diff -u "$work_directory/expected-release-manifest" "$payload/release-manifest.txt" >/dev/null || fail 'release manifest metadata is not exact'
+}
+
+validate_lifecycle_compatibility() {
+    if [ "$installation_action" = restore ]; then
+        if [ "$preserved_state_schema" -ne 0 ]; then
+            [ "$preserved_state_schema" -ge "$minimum_schema" ] && [ "$preserved_state_schema" -le "$state_schema" ] || \
+                fail "target schema range $minimum_schema-$state_schema cannot read preserved durable schema $preserved_state_schema"
+        fi
+        note "Preserved-data compatibility: durable=$preserved_state_schema, target=$minimum_schema-$state_schema"
+        return 0
+    fi
+    [ "$installation_action" = upgrade ] || [ "$installation_action" = downgrade ] || return 0
+    if [ "$current_state_schema" -ne 0 ]; then
+        [ "$current_state_schema" -ge "$minimum_schema" ] && [ "$current_state_schema" -le "$state_schema" ] || \
+            fail "target schema range $minimum_schema-$state_schema cannot read durable schema $current_state_schema"
+    fi
+    [ "$state_schema" -ge "$previous_schema_minimum" ] && [ "$state_schema" -le "$previous_schema_current" ] || \
+        fail "installed schema range $previous_schema_minimum-$previous_schema_current cannot roll back state potentially written at schema $state_schema"
+    note "Schema compatibility: durable=$current_state_schema, installed=$previous_schema_minimum-$previous_schema_current, target=$minimum_schema-$state_schema"
+}
+
+prepare_policy() {
+    controller_uid=$(id -u "$SERVICE_USER")
+    policy="$work_directory/policy"
+    mkdir "$policy"
+    render_asset embedded_config "$policy/config.json"
+    render_asset embedded_controller_unit "$policy/lifepowerctl-controller.service"
+    render_asset embedded_runner_unit "$policy/lifepowerctl-job-runner.service"
+    render_asset embedded_poweroff_unit "$policy/lifepowerctl-poweroff.service"
+    render_asset embedded_poweroff_path "$policy/lifepowerctl-poweroff.path"
+    render_asset embedded_web_unit "$policy/lifepowerctl.service"
+    render_asset embedded_sudoers "$policy/sudoers"
+    render_asset embedded_tmpfiles "$policy/tmpfiles.conf"
+    render_asset embedded_layout "$policy/install-manifest"
+    visudo -c -f "$policy/sudoers" >/dev/null || fail 'generated sudo policy is invalid'
+}
+
+prepare_lifecycle_backup() {
+    lifecycle_backup_started=1
+    previous_new="${PREVIOUS_ROOT}.new"
+    [ ! -e "$PREVIOUS_ROOT" ] && [ ! -L "$PREVIOUS_ROOT" ] && [ ! -e "$previous_new" ] && [ ! -L "$previous_new" ] || fail 'a previous-payload staging path already exists; run the matching saved installer with --recover'
+    mkdir -m 0700 "$previous_new"
+    install -o root -g root -m 0755 "$INSTALL_ROOT/lifepowerctl" "$previous_new/lifepowerctl"
+    install -o root -g root -m 0755 "$INSTALL_ROOT/uninstall.sh" "$previous_new/uninstall.sh"
+    install -o root -g root -m 0644 "$INSTALL_ROOT/install-manifest" "$previous_new/install-manifest"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$previous_new/controller.service"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" "$previous_new/job-runner.service"
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$previous_new/poweroff.service"
+    if [ -f "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" ]; then
+        install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$previous_new/poweroff.path"
+    else
+        : >"$previous_new/poweroff.path.absent"
+        chmod 0644 "$previous_new/poweroff.path.absent"
+    fi
+    install -o root -g root -m 0644 "$SYSTEMD_ROOT/lifepowerctl.service" "$previous_new/web.service"
+    install -o root -g root -m 0644 "$TMPFILES_POLICY" "$previous_new/tmpfiles.conf"
+    install -o root -g root -m 0440 "$SUDOERS_POLICY" "$previous_new/sudoers"
+    install -o root -g root -m 0600 "$METADATA_ROOT/installed" "$previous_new/installed"
+    mv -- "$previous_new" "$PREVIOUS_ROOT"
+    validate_previous_payload
+}
+
+mutate_fresh() {
+    rollback_kind=fresh
+    mkdir -m 0700 "$METADATA_ROOT"
+    rollback_authorized=1
+    write_transaction metadata
+    groupadd --system "$SERVICE_GROUP"
+    write_transaction service-group
+    groupadd --system "$JOBS_GROUP"
+    write_transaction jobs-group
+    useradd --system --gid "$SERVICE_GROUP" --home-dir "$STATE_ROOT" --no-create-home --shell /usr/sbin/nologin "$SERVICE_USER"
+    write_transaction service-user
+    usermod -a -G i2c,"$JOBS_GROUP" "$SERVICE_USER"
+    usermod -a -G "$JOBS_GROUP" "$job_user"
+    write_transaction memberships
+    prepare_policy
+    write_transaction policy
+
+    install -d -o root -g root -m 0755 "$INSTALL_ROOT"
+    install -d -o root -g "$SERVICE_GROUP" -m 0750 "$CONFIG_ROOT"
+    install -d -o "$SERVICE_USER" -g "$SERVICE_GROUP" -m 0700 "$STATE_ROOT" "$STATE_ROOT/activity"
+    install -d -o "$job_user" -g "$JOBS_GROUP" -m 2750 "$JOBS_ROOT" "$JOBS_ROOT/output"
+    write_transaction directories
+    install_atomic "$payload/lifepowerctl" "$INSTALL_ROOT/lifepowerctl" root root 0755
+    install_atomic "$work_directory/$UNINSTALL_ASSET" "$INSTALL_ROOT/uninstall.sh" root root 0755
+    install_atomic "$policy/install-manifest" "$INSTALL_ROOT/install-manifest" root root 0644
+    install_atomic "$policy/config.json" "$CONFIG_ROOT/config.json" root "$SERVICE_GROUP" 0640
+    write_transaction payload
+    install_atomic "$policy/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 0644
+    install_atomic "$policy/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 0644
+    install_atomic "$policy/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl.service" root root 0644
+    install_atomic "$policy/tmpfiles.conf" "$TMPFILES_POLICY" root root 0644
+    install_atomic "$policy/sudoers" "$SUDOERS_POLICY" root root 0440
+    systemd-analyze verify \
+        "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'generated systemd policy is invalid'
+    systemd-tmpfiles --create "$TMPFILES_POLICY"
+    write_transaction units
+    note 'Creating the one-time browser setup link on the controlling terminal...'
+    "$INSTALL_ROOT/lifepowerctl" admin ensure-setup -config "$CONFIG_ROOT/config.json"
+    write_transaction setup
+    systemctl daemon-reload
+    systemctl enable lifepowerctl-job-runner.service lifepowerctl-controller.service lifepowerctl-poweroff.path
+    systemctl start lifepowerctl-poweroff.path
+    if [ "$web_lifecycle" = enabled ]; then systemctl enable lifepowerctl.service; else systemctl disable lifepowerctl.service >/dev/null 2>&1 || :; fi
+    write_transaction enabled
+    systemctl start lifepowerctl-job-runner.service
+    systemctl start lifepowerctl-controller.service
+    systemctl start lifepowerctl.service
+    write_transaction started
+    health_ready=0
+    for attempt in 1 2 3 4
+    do
+        if timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json" >"$work_directory/status" 2>"$work_directory/status-error" && \
+            grep -Fqx "running_version=$RELEASE_VERSION" "$work_directory/status" && \
+            grep -Fqx 'controller=ready' "$work_directory/status" && \
+            grep -Fqx 'runner=ready' "$work_directory/status" && \
+            grep -Fqx 'board=ready' "$work_directory/status" && \
+            grep -Fqx 'maintenance=safe' "$work_directory/status"
+        then
+            health_ready=1
+            break
+        fi
+        sleep 1
+    done
+    [ "$health_ready" -eq 1 ] || fail 'services did not reach the expected ready, board-ready, safe-idle state within 44 seconds'
+    check_web_health || fail 'web health endpoint did not become ready'
+    write_transaction healthy
+    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    chmod 0600 "$METADATA_ROOT/installed.new"
+    mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
+    rm -f -- "$TRANSACTION_FILE"
+    install_complete=1
+    rollback_authorized=0
+}
+
+mutate_lifecycle() {
+    rollback_kind=lifecycle
+    prepare_policy
+    prepare_lifecycle_backup
+    write_lifecycle_transaction prepared
+    stop_lifecycle_services
+    write_lifecycle_transaction stopped
+
+    install_atomic "$payload/lifepowerctl" "$INSTALL_ROOT/lifepowerctl" root root 0755
+    install_atomic "$work_directory/$UNINSTALL_ASSET" "$INSTALL_ROOT/uninstall.sh" root root 0755
+    install_atomic "$policy/install-manifest" "$INSTALL_ROOT/install-manifest" root root 0644
+    write_lifecycle_transaction payload
+    install_atomic "$policy/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 0644
+    install_atomic "$policy/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 0644
+    install_atomic "$policy/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl.service" root root 0644
+    install_atomic "$policy/tmpfiles.conf" "$TMPFILES_POLICY" root root 0644
+    install_atomic "$policy/sudoers" "$SUDOERS_POLICY" root root 0440
+    systemd-analyze verify \
+        "$SYSTEMD_ROOT/lifepowerctl-controller.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
+        "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'updated systemd policy is invalid'
+    visudo -c -f "$SUDOERS_POLICY" >/dev/null || fail 'updated sudo policy is invalid'
+    systemd-tmpfiles --create "$TMPFILES_POLICY"
+    systemctl daemon-reload
+    write_lifecycle_transaction units
+
+    systemctl enable lifepowerctl-poweroff.path
+    systemctl start lifepowerctl-job-runner.service
+    systemctl start lifepowerctl-poweroff.path
+    systemctl start lifepowerctl-controller.service
+    if [ "$current_web_active" = active ]; then systemctl start lifepowerctl.service; else systemctl stop lifepowerctl.service >/dev/null 2>&1 || :; fi
+    write_lifecycle_transaction started
+    wait_for_installed_health "$RELEASE_VERSION" "$RELEASE_COMMIT" "$work_directory/status" \
+        "$minimum_schema" "$state_schema" || fail 'updated services did not reach the expected healthy, board-ready, maintenance-safe state'
+    write_lifecycle_transaction healthy
+
+    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    chmod 0600 "$METADATA_ROOT/installed.new"
+    mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
+    write_lifecycle_transaction committed
+    rm -f -- "$TRANSACTION_FILE"
+    rm -rf -- "$PREVIOUS_ROOT"
+    install_complete=1
+    rollback_authorized=0
+    lifecycle_backup_started=0
+}
+
+mutate_restore() {
+    rollback_kind=restore
+    prepare_policy
+    write_restore_transaction prepared
+    install -d -o root -g root -m 0755 "$INSTALL_ROOT"
+    install_atomic "$payload/lifepowerctl" "$INSTALL_ROOT/lifepowerctl" root root 0755
+    install_atomic "$work_directory/$UNINSTALL_ASSET" "$INSTALL_ROOT/uninstall.sh" root root 0755
+    install_atomic "$policy/install-manifest" "$INSTALL_ROOT/install-manifest" root root 0644
+    write_restore_transaction payload
+    install_atomic "$policy/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-controller.service" root root 0644
+    install_atomic "$policy/lifepowerctl-job-runner.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" root root 0644
+    install_atomic "$policy/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" root root 0644
+    install_atomic "$policy/lifepowerctl.service" "$SYSTEMD_ROOT/lifepowerctl.service" root root 0644
+    install_atomic "$policy/tmpfiles.conf" "$TMPFILES_POLICY" root root 0644
+    install_atomic "$policy/sudoers" "$SUDOERS_POLICY" root root 0440
+    systemd-analyze verify "$SYSTEMD_ROOT/lifepowerctl-controller.service" "$SYSTEMD_ROOT/lifepowerctl-job-runner.service" \
+        "$SYSTEMD_ROOT/lifepowerctl-poweroff.service" "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" "$SYSTEMD_ROOT/lifepowerctl.service" >/dev/null || fail 'restored systemd policy is invalid'
+    visudo -c -f "$SUDOERS_POLICY" >/dev/null || fail 'restored sudo policy is invalid'
+    systemd-tmpfiles --create "$TMPFILES_POLICY"
+    systemctl daemon-reload
+    write_restore_transaction units
+    systemctl enable lifepowerctl-job-runner.service lifepowerctl-controller.service lifepowerctl-poweroff.path
+    systemctl start lifepowerctl-poweroff.path
+    if [ "$web_lifecycle" = enabled ]; then systemctl enable lifepowerctl.service; else systemctl disable lifepowerctl.service >/dev/null 2>&1 || :; fi
+    systemctl start lifepowerctl-job-runner.service
+    systemctl start lifepowerctl-controller.service
+    systemctl start lifepowerctl.service
+    current_web_active=active
+    write_restore_transaction started
+    wait_for_installed_health "$RELEASE_VERSION" "$RELEASE_COMMIT" "$work_directory/status" \
+        "$minimum_schema" "$state_schema" || fail 'restored services did not reach the expected healthy, board-ready, maintenance-safe state'
+    write_restore_transaction healthy
+    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    chmod 0600 "$METADATA_ROOT/installed.new"
+    rm -f -- "$METADATA_ROOT/preserved"
+    mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
+    write_restore_transaction committed
+    rm -f -- "$TRANSACTION_FILE"
+    install_complete=1
+    rollback_authorized=0
+}
+
+# The renderer replaces this marker with reviewed policy-printing functions.
+# @EMBED_POLICY_FUNCTIONS@
+
+non_interactive=0; accept_authority=0; development_host=0; web_explicit=0; allow_downgrade=0
+web_lifecycle=enabled; job_user=''; install_complete=0; rollback_authorized=0
+work_directory=''; installation_action=fresh; rollback_kind=''; lifecycle_backup_started=0; preserved_state_schema=''
+
+if [ "${1-}" = --help ] || [ "${1-}" = -h ]; then [ "$#" -eq 1 ] || { usage >&2; exit 2; }; usage; exit 0; fi
+if [ "${1-}" = --release-info ]; then [ "$#" -eq 1 ] || { usage >&2; exit 2; }; release_info; exit 0; fi
+if [ "${1-}" = --recover ]; then [ "$#" -eq 1 ] || { usage >&2; exit 2; }; recover_install; exit 0; fi
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --non-interactive) non_interactive=1 ;;
+        --accept-existing-authority) accept_authority=1 ;;
+        --development-host) development_host=1 ;;
+        --allow-downgrade) allow_downgrade=1 ;;
+        --job-user) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; job_user=$2; shift ;;
+        --job-user=*) job_user=${1#*=} ;;
+        --web=enabled|--web=on-demand) web_lifecycle=${1#*=}; web_explicit=1 ;;
+        *) usage >&2; exit 2 ;;
+    esac
+    shift
+done
+requested_job_user=$job_user
+requested_web=$web_lifecycle
+if [ "$non_interactive" -eq 1 ] && [ -z "$requested_job_user" ]; then fail '--job-user is required with --non-interactive'; fi
+if [ "$non_interactive" -eq 1 ] && [ "$web_explicit" -ne 1 ]; then fail '--web=enabled or --web=on-demand is required with --non-interactive'; fi
+[ "$(id -u)" -eq 0 ] || fail 'root is required; inspect the saved script, then run sudo sh ./install.sh'
+load_installation_record
+if [ "$installation_action" != fresh ]; then
+    if [ -n "$requested_job_user" ] && [ "$requested_job_user" != "$installed_job_user" ]; then fail "installed job user is $installed_job_user; changing it is not supported by this installer"; fi
+    if [ "$web_explicit" -eq 1 ] && [ "$requested_web" != "$installed_web" ]; then fail "installed web lifecycle is $installed_web; changing it is not supported during verification or update"; fi
+    job_user=$installed_job_user
+    web_lifecycle=$installed_web
+elif [ -z "$job_user" ]; then
+    [ "$non_interactive" -eq 0 ] || fail '--job-user is required with --non-interactive'
+    job_user=${SUDO_USER-}
+    [ -n "$job_user" ] && [ "$job_user" != root ] || fail 'cannot infer the job user; specify --job-user USER'
+fi
+
+note "LifePower Control ${RELEASE_VERSION}"
+note "Source: https://github.com/${REPOSITORY}"
+note "Exact assets: ${RELEASE_BASE_URL}"
+note "Web lifecycle: ${web_lifecycle}"
+preflight
+if [ "$installation_action" = same-version ]; then
+    note "LifePower Control ${RELEASE_VERSION} is already installed, healthy, and maintenance-safe; no files or services were changed."
+    exit 0
+fi
+if [ "$non_interactive" -eq 0 ]; then ask_yes "Proceed with $installation_action to ${RELEASE_VERSION} for job user $job_user?" || fail 'installation was not confirmed'; fi
+work_directory=$(mktemp -d '/tmp/lifepowerctl-install.XXXXXX')
+trap 'cleanup $?' EXIT
+trap 'cleanup 1' HUP INT TERM
+acquire_and_validate
+validate_lifecycle_compatibility
+case "$installation_action" in
+    fresh) mutate_fresh ;;
+    restore) mutate_restore ;;
+    *) mutate_lifecycle ;;
+esac
+note "LifePower Control ${RELEASE_VERSION} $installation_action completed successfully."
+note "Installed and running version: ${RELEASE_VERSION} (${RELEASE_COMMIT})"
+note 'Services: job runner, controller, and web are ready; board is ready; maintenance is safe.'
+if [ "$installation_action" = restore ]; then
+    note 'Local administration URL: http://127.0.0.1:8080/ (existing authentication data was preserved).'
+else
+    note 'Local setup URL: http://127.0.0.1:8080/ (use the one-time setup link printed above).'
+fi
+note 'Remote browser tunnel: ssh -N -L 8080:127.0.0.1:8080 USER@PI-HOST'
+note "Selected job identity: $job_user (inherited authority was reported before confirmation)."
+note 'Logs: sudo journalctl -u lifepowerctl-controller -u lifepowerctl-job-runner -u lifepowerctl'
+note 'Uninstall (data preserving): sudo /usr/lib/lifepowerctl/uninstall.sh'
+if [ "$installation_action" != restore ]; then note 'The setup link was printed only to your terminal and was not retained by the installer.'; fi
+if [ "$web_lifecycle" = on-demand ]; then note 'Web is running for setup but is not enabled at boot; stop it when setup is complete.'; fi

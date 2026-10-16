@@ -1,0 +1,47 @@
+[Unit]
+Description=LifePower Control always-on duty-cycle controller
+After=local-fs.target systemd-tmpfiles-setup.service lifepowerctl-job-runner.service
+Wants=lifepowerctl-job-runner.service
+
+[Service]
+Type=simple
+User=lifepowerctl
+Group=lifepowerctl
+SupplementaryGroups=lifepowerctl-jobs i2c
+ExecStart=/usr/lib/lifepowerctl/lifepowerctl controller -config /etc/lifepowerctl/config.json
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=15s
+UMask=0027
+MemoryMax=128M
+TasksMax=32
+LimitNOFILE=128
+# Poweroff admission is a fixed file consumed by a root-owned systemd path.
+NoNewPrivileges=yes
+AmbientCapabilities=
+CapabilityBoundingSet=
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=/dev/i2c-1 rw
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectKernelLogs=yes
+ProtectProc=invisible
+ReadWritePaths=/run/lifepowerctl /var/lib/lifepowerctl
+ReadOnlyPaths=/var/lib/lifepowerctl-jobs/output
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+MemoryDenyWriteExecute=yes
+LockPersonality=yes
+RestrictRealtime=yes
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

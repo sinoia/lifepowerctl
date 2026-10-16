@@ -1,0 +1,2 @@
+# Intentionally empty compatibility policy. Poweroff admission uses the
+# root-owned lifepowerctl-poweroff.path unit; no sudo authority is granted.
