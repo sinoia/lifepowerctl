@@ -111,6 +111,9 @@ func TestReleaseRendererKeepsConstrainedExactAssetContract(t *testing.T) {
 		"REQUIRE_RELEASE_TAG:-0",
 		"refs/tags/$release_version^{commit}",
 		"CGO_ENABLED=0 GOOS=linux GOARCH=arm64",
+		`target_build_info=$("$go_command" version -m "$stage_directory/lifepowerctl")`,
+		`host_goarch=$("$go_command" env GOARCH)`,
+		`metadata_binary="$work_directory/metadata-verifier"`,
 		"GOMAXPROCS=1 GOMEMLIMIT=64MiB GOGC=5",
 		"-buildvcs=false -mod=readonly -trimpath -p=1",
 		"source_state=clean",
@@ -124,8 +127,14 @@ func TestReleaseRendererKeepsConstrainedExactAssetContract(t *testing.T) {
 			t.Fatalf("release renderer missing %q", required)
 		}
 	}
-	if strings.Contains(value, "git push") || strings.Contains(value, "gh release") {
-		t.Fatal("release renderer contains a publication operation")
+	for _, forbidden := range []string{
+		"git push",
+		"gh release",
+		`machine_info=$("$stage_directory/lifepowerctl" version --machine)`,
+	} {
+		if strings.Contains(value, forbidden) {
+			t.Fatalf("release renderer contains forbidden construction %q", forbidden)
+		}
 	}
 	if output, err := exec.Command("/bin/sh", "-n", filepath.Join(root, "scripts", "build-release.sh")).CombinedOutput(); err != nil {
 		t.Fatalf("release renderer shell syntax: %v\n%s", err, output)

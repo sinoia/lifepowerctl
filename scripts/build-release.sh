@@ -87,15 +87,35 @@ env GOMAXPROCS=1 GOMEMLIMIT=64MiB GOGC=5 \
     "$go_command" build -buildvcs=false -mod=readonly -trimpath -p=1 \
     -ldflags "$linker_flags" -o "$stage_directory/lifepowerctl" ./cmd/lifepowerctl
 
-machine_info=$("$stage_directory/lifepowerctl" version --machine)
+target_build_info=$("$go_command" version -m "$stage_directory/lifepowerctl")
+for expected_setting in 'CGO_ENABLED=0' 'GOOS=linux' 'GOARCH=arm64'
+do
+    printf '%s\n' "$target_build_info" | grep -Eq "^[[:space:]]+build[[:space:]]+$expected_setting$" || {
+        printf '%s\n' "release build refused: staged binary is missing build setting $expected_setting" >&2
+        exit 1
+    }
+done
+
+metadata_binary="$stage_directory/lifepowerctl"
+host_goos=$("$go_command" env GOOS)
+host_goarch=$("$go_command" env GOARCH)
+if [ "$host_goos:$host_goarch" != linux:arm64 ]; then
+    metadata_binary="$work_directory/metadata-verifier"
+    env GOMAXPROCS=1 GOMEMLIMIT=64MiB GOGC=5 \
+        GOCACHE="$project_root/.cache/go-build" \
+        GOMODCACHE="$project_root/.cache/go-mod" \
+        GOFLAGS=-p=1 CGO_ENABLED=0 \
+        "$go_command" build -buildvcs=false -mod=readonly -trimpath -p=1 \
+        -ldflags "$linker_flags" -o "$metadata_binary" ./cmd/lifepowerctl
+fi
+
+machine_info=$("$metadata_binary" version --machine)
 for expected in \
     'format=1' \
     'product=lifepowerctl' \
     "version=$release_version" \
     "commit=$release_commit" \
-    'source_state=clean' \
-    'target_os=linux' \
-    'target_arch=arm64'
+    'source_state=clean'
 do
     printf '%s\n' "$machine_info" | grep -Fqx "$expected" || {
         printf '%s\n' "release build refused: staged binary is missing $expected" >&2
