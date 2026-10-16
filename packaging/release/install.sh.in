@@ -513,7 +513,7 @@ wait_for_installed_health() {
     expected_schema_minimum=$4
     expected_schema_current=$5
     health_ready=0
-    for attempt in 1 2 3 4
+    for _ in 1 2 3 4
     do
         if timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json" >"$status_destination" 2>"${status_destination}.error" && \
             grep -Fqx "running_version=$expected_version" "$status_destination" && \
@@ -1247,7 +1247,7 @@ mutate_fresh() {
     systemctl start lifepowerctl.service
     write_transaction started
     health_ready=0
-    for attempt in 1 2 3 4
+    for _ in 1 2 3 4
     do
         if timeout 10 runuser -u "$SERVICE_USER" -- "$INSTALL_ROOT/lifepowerctl" admin status -config "$CONFIG_ROOT/config.json" >"$work_directory/status" 2>"$work_directory/status-error" && \
             grep -Fqx "running_version=$RELEASE_VERSION" "$work_directory/status" && \

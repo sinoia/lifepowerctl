@@ -13,8 +13,8 @@ usage() {
 release_version=$1
 printf '%s\n' "$release_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || usage
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+project_root=$(CDPATH='' cd -- "$script_directory/.." && pwd)
 cd "$project_root"
 
 source_status=$(git status --porcelain=v1 --untracked-files=all | sed '\|^?? \.review/|d')
@@ -87,7 +87,7 @@ env GOMAXPROCS=1 GOMEMLIMIT=64MiB GOGC=5 \
     "$go_command" build -buildvcs=false -mod=readonly -trimpath -p=1 \
     -ldflags "$linker_flags" -o "$stage_directory/lifepowerctl" ./cmd/lifepowerctl
 
-machine_info=$($stage_directory/lifepowerctl version --machine)
+machine_info=$("$stage_directory/lifepowerctl" version --machine)
 for expected in \
     'format=1' \
     'product=lifepowerctl' \

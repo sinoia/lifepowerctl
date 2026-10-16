@@ -25,10 +25,10 @@ printf '%s\n' "$release_base_url" | grep -Eq '^https?://[0-9A-Za-z.:-]+(/[0-9A-Z
     exit 1
 }
 
-script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-project_root=$(CDPATH= cd -- "$script_directory/.." && pwd)
+script_directory=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+project_root=$(CDPATH='' cd -- "$script_directory/.." && pwd)
 temporary=$(mktemp "${TMPDIR:-/tmp}/lifepowerctl-installer.XXXXXX")
-output_directory=$(CDPATH= cd -- "$(dirname -- "$output")" && pwd)
+output_directory=$(CDPATH='' cd -- "$(dirname -- "$output")" && pwd)
 rendered=$(mktemp "$output_directory/.lifepowerctl-installer.XXXXXX")
 cleanup() {
     rm -f -- "$temporary" "$rendered"

@@ -51,7 +51,9 @@ jobs:
           sh -n packaging/release/uninstall.sh.in
           sh -n scripts/*.sh
           sh -n tools/hardware-gate/*.sh
-          shellcheck packaging/release/*.sh.in scripts/*.sh tools/hardware-gate/*.sh
+          # These guards intentionally use A && B || fail so either failed
+          # safety predicate reaches the fatal path.
+          shellcheck -e SC2015 packaging/release/*.sh.in scripts/*.sh tools/hardware-gate/*.sh
       - name: Check public tree and documentation
         run: sh scripts/check-public-tree.sh
 
