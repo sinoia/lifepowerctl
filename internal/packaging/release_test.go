@@ -229,6 +229,48 @@ func TestRenderedInstallerAcquiresAndValidatesExactLocalFixture(t *testing.T) {
 	}
 }
 
+func TestRenderedInstallerStagesAndValidatesExactAssetDirectory(t *testing.T) {
+	fixture := newAcquisitionFixture(t)
+	output, err := runAssetDirectoryHarness(t, fixture)
+	if err != nil {
+		t.Fatalf("exact asset-directory acquisition: %v\n%s", err, output)
+	}
+}
+
+func TestRenderedInstallerRejectsSymlinkInAssetDirectory(t *testing.T) {
+	fixture := newAcquisitionFixture(t)
+	uninstaller := filepath.Join(fixture, "uninstall.sh")
+	if err := os.Remove(uninstaller); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(fixture, testReleaseArchive), uninstaller); err != nil {
+		t.Fatal(err)
+	}
+	output, err := runAssetDirectoryHarness(t, fixture)
+	if err == nil || !strings.Contains(string(output), "local release asset is missing, not regular, or a symlink") {
+		t.Fatalf("symlinked local asset did not fail closed: %v\n%s", err, output)
+	}
+}
+
+func TestRenderedInstallerRejectsUnsafeAssetDirectoryMetadata(t *testing.T) {
+	tests := []struct {
+		name, owner, directoryMode, fileMode, required string
+	}{
+		{name: "non-root owner", owner: "tester:tester", directoryMode: "700", fileMode: "600", required: "--asset-dir must be owned by root:root"},
+		{name: "writable directory", owner: "root:root", directoryMode: "777", fileMode: "600", required: "--asset-dir must not be group- or other-writable"},
+		{name: "writable asset", owner: "root:root", directoryMode: "700", fileMode: "666", required: "local release asset has unsafe permissions"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			fixture := newAcquisitionFixture(t)
+			output, err := runAssetDirectoryHarnessWithMetadata(t, fixture, test.owner, test.directoryMode, test.fileMode)
+			if err == nil || !strings.Contains(string(output), test.required) {
+				t.Fatalf("unsafe local asset metadata did not fail closed with %q: %v\n%s", test.required, err, output)
+			}
+		})
+	}
+}
+
 func TestRenderedInstallerRejectsAdversarialAcquisition(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -1820,6 +1862,7 @@ test -n "$url"
 	harness := prefix + `
 PATH="$TEST_TOOLS:/usr/bin:/bin"
 export PATH
+asset_directory=''
 work_directory=$(mktemp -d /tmp/lifepowerctl-acquire.XXXXXX)
 trap 'rm -rf -- "$work_directory"' EXIT HUP INT TERM
 acquire_and_validate
@@ -1831,6 +1874,46 @@ test -x "$payload/lifepowerctl"
 	}
 	command := exec.Command("/bin/sh", harnessPath)
 	command.Env = append(os.Environ(), "TEST_TOOLS="+tools, "FIXTURE_ROOT="+fixture)
+	return command.CombinedOutput()
+}
+
+func runAssetDirectoryHarness(t *testing.T, fixture string) ([]byte, error) {
+	t.Helper()
+	return runAssetDirectoryHarnessWithMetadata(t, fixture, "root:root", "700", "600")
+}
+
+func runAssetDirectoryHarnessWithMetadata(t *testing.T, fixture, owner, directoryMode, fileMode string) ([]byte, error) {
+	t.Helper()
+
+	tools := t.TempDir()
+	stat := `#!/bin/sh
+set -eu
+case "$2" in
+    %U:%G) printf '%s\n' "$TEST_STAT_OWNER" ;;
+    %a) if [ -d "$3" ]; then printf '%s\n' "$TEST_DIRECTORY_MODE"; else printf '%s\n' "$TEST_FILE_MODE"; fi ;;
+    *) exec /usr/bin/stat "$@" ;;
+esac
+`
+	if err := os.WriteFile(filepath.Join(tools, "stat"), []byte(stat), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	prefix := renderedInstallerPrefix(t)
+	harness := prefix + `
+PATH="$TEST_TOOLS:/usr/bin:/bin"
+export PATH
+asset_directory="$FIXTURE_ROOT"
+work_directory=$(mktemp -d /tmp/lifepowerctl-acquire.XXXXXX)
+trap 'rm -rf -- "$work_directory"' EXIT HUP INT TERM
+acquire_and_validate
+test -x "$payload/lifepowerctl"
+`
+	harnessPath := filepath.Join(t.TempDir(), "asset-directory.sh")
+	if err := os.WriteFile(harnessPath, []byte(harness), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("/bin/sh", harnessPath)
+	command.Env = append(os.Environ(), "TEST_TOOLS="+tools, "FIXTURE_ROOT="+fixture,
+		"TEST_STAT_OWNER="+owner, "TEST_DIRECTORY_MODE="+directoryMode, "TEST_FILE_MODE="+fileMode)
 	return command.CombinedOutput()
 }
 
