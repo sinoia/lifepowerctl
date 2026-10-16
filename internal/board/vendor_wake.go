@@ -61,11 +61,11 @@ func (device *VendorWakeDevice) ProgramAbsolute(ctx context.Context, intended ui
 		return result, err
 	}
 	result.RelativeWritten = true
-	relative, err := device.readUint(ctx, "WAKE_TIME", 16)
+	relative, err := device.readUint16(ctx, "WAKE_TIME")
 	if err != nil {
 		return result, err
 	}
-	result.RelativeReadBack = uint16(relative)
+	result.RelativeReadBack = relative
 	result.RelativeVerified = relative == 0
 	if !result.RelativeVerified {
 		return result, fmt.Errorf("verify WAKE_TIME: %w", ErrReadback)
@@ -74,12 +74,12 @@ func (device *VendorWakeDevice) ProgramAbsolute(ctx context.Context, intended ui
 		return result, err
 	}
 	result.AbsoluteWritten = true
-	absolute, err := device.readUint(ctx, "RTC_WAKE_TIME", 32)
+	absolute, err := device.readUint32(ctx, "RTC_WAKE_TIME")
 	if err != nil {
 		return result, err
 	}
-	result.AbsoluteReadBack = uint32(absolute)
-	result.AbsoluteVerified = absolute == uint64(intended)
+	result.AbsoluteReadBack = absolute
+	result.AbsoluteVerified = absolute == intended
 	if !result.AbsoluteVerified {
 		return result, fmt.Errorf("verify RTC_WAKE_TIME: %w", ErrReadback)
 	}
@@ -96,11 +96,11 @@ func (device *VendorWakeDevice) Disarm(ctx context.Context) (WakeProgrammingResu
 		firstErr = err
 	} else {
 		result.RelativeWritten = true
-		relative, err := device.readUint(ctx, "WAKE_TIME", 16)
+		relative, err := device.readUint16(ctx, "WAKE_TIME")
 		if err != nil {
 			firstErr = err
 		} else {
-			result.RelativeReadBack = uint16(relative)
+			result.RelativeReadBack = relative
 			result.RelativeVerified = relative == 0
 			if !result.RelativeVerified {
 				firstErr = fmt.Errorf("verify WAKE_TIME: %w", ErrReadback)
@@ -114,14 +114,14 @@ func (device *VendorWakeDevice) Disarm(ctx context.Context) (WakeProgrammingResu
 		return result, firstErr
 	}
 	result.AbsoluteWritten = true
-	absolute, err := device.readUint(ctx, "RTC_WAKE_TIME", 32)
+	absolute, err := device.readUint32(ctx, "RTC_WAKE_TIME")
 	if err != nil {
 		if firstErr == nil {
 			firstErr = err
 		}
 		return result, firstErr
 	}
-	result.AbsoluteReadBack = uint32(absolute)
+	result.AbsoluteReadBack = absolute
 	result.AbsoluteVerified = absolute == 0
 	if !result.AbsoluteVerified {
 		if firstErr == nil {
@@ -134,28 +134,27 @@ func (device *VendorWakeDevice) Disarm(ctx context.Context) (WakeProgrammingResu
 // ObserveBoot uses the exact bracketed read order required by boot
 // classification and performs no write.
 func (device *VendorWakeDevice) ObserveBoot(ctx context.Context) (schedule.Observation, error) {
-	before, err := device.readUint(ctx, "RTC_TIME", 32)
+	before, err := device.readUint32(ctx, "RTC_TIME")
 	if err != nil {
 		return schedule.Observation{}, err
 	}
-	absolute, err := device.readUint(ctx, "RTC_WAKE_TIME", 32)
+	absolute, err := device.readUint32(ctx, "RTC_WAKE_TIME")
 	if err != nil {
 		return schedule.Observation{}, err
 	}
-	relative, err := device.readUint(ctx, "WAKE_TIME", 16)
+	relative, err := device.readUint16(ctx, "WAKE_TIME")
 	if err != nil {
 		return schedule.Observation{}, err
 	}
-	after, err := device.readUint(ctx, "RTC_TIME", 32)
+	after, err := device.readUint32(ctx, "RTC_TIME")
 	if err != nil {
 		return schedule.Observation{}, err
 	}
-	return schedule.Observation{RTCBefore: uint32(before), RTCAfter: uint32(after), RTCWake: uint32(absolute), WakeMinutes: uint16(relative)}, nil
+	return schedule.Observation{RTCBefore: before, RTCAfter: after, RTCWake: absolute, WakeMinutes: relative}, nil
 }
 
 func (device *VendorWakeDevice) ReadRTC(ctx context.Context) (uint32, error) {
-	value, err := device.readUint(ctx, "RTC_TIME", 32)
-	return uint32(value), err
+	return device.readUint32(ctx, "RTC_TIME")
 }
 
 func (device *VendorWakeDevice) write(ctx context.Context, register Register, value uint64) error {
@@ -165,15 +164,36 @@ func (device *VendorWakeDevice) write(ctx context.Context, register Register, va
 	return nil
 }
 
-func (device *VendorWakeDevice) readUint(ctx context.Context, register Register, bits int) (uint64, error) {
+func (device *VendorWakeDevice) readInteger(ctx context.Context, register Register) (int64, error) {
 	command, err := device.runner.Run(ctx, VendorCLIPath, []string{"GET", string(register)}, device.limits)
 	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", register, err)
 	}
 	value, err := ParseVendorInteger(command.stdout)
-	maximum := uint64(1)<<bits - 1
-	if err != nil || value < 0 || uint64(value) > maximum {
+	if err != nil {
 		return 0, fmt.Errorf("read %s: %w", register, ErrInvalidVendorOutput)
 	}
-	return uint64(value), nil
+	return value, nil
+}
+
+func (device *VendorWakeDevice) readUint16(ctx context.Context, register Register) (uint16, error) {
+	value, err := device.readInteger(ctx, register)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 || value > int64(^uint16(0)) {
+		return 0, fmt.Errorf("read %s: %w", register, ErrInvalidVendorOutput)
+	}
+	return uint16(value), nil
+}
+
+func (device *VendorWakeDevice) readUint32(ctx context.Context, register Register) (uint32, error) {
+	value, err := device.readInteger(ctx, register)
+	if err != nil {
+		return 0, err
+	}
+	if value < 0 || value > int64(^uint32(0)) {
+		return 0, fmt.Errorf("read %s: %w", register, ErrInvalidVendorOutput)
+	}
+	return uint32(value), nil
 }
