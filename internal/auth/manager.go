@@ -343,6 +343,9 @@ func randomToken(random io.Reader) (string, error) {
 }
 
 func tokenDigest(token string) string {
+	// Session tokens contain 256 bits from a cryptographic random source. This
+	// digest is a one-way lookup value for those high-entropy bearer tokens, not
+	// a password hash.
 	digest := sha256.Sum256([]byte(token))
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }

@@ -106,6 +106,15 @@ func TestVendorWakeReadsBoardClock(t *testing.T) {
 	}
 }
 
+func TestVendorWakeRejectsBoardClockOutsideUint32(t *testing.T) {
+	runner := &sequenceRunner{t: t, commands: []expectedCommand{
+		{arguments: []string{"GET", "RTC_TIME"}, result: commandResult{stdout: []byte("4294967296\n")}},
+	}}
+	if _, err := newVendorWakeDevice(runner, limits.Default().Vendor).ReadRTC(context.Background()); !errors.Is(err, ErrInvalidVendorOutput) {
+		t.Fatalf("ReadRTC() error = %v, want ErrInvalidVendorOutput", err)
+	}
+}
+
 func TestVendorWakeRejectsZeroAndMalformedValuesWithoutWritingAbsolute(t *testing.T) {
 	device := newVendorWakeDevice(&sequenceRunner{t: t}, limits.Default().Vendor)
 	if _, err := device.ProgramAbsolute(context.Background(), 0); err == nil {
