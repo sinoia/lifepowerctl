@@ -43,6 +43,21 @@ calculated digest with the single `install.sh` entry in `checksums.txt`. Then fo
 [Release verification](release-verification.md) to verify the GitHub
 attestation and source identity before granting root privileges.
 
+For an offline or separately staged installation, also download the release
+archive and `uninstall.sh`, verify all four entries in `checksums.txt`, and
+place the three assets consumed by the installer in a protected root-owned
+directory:
+
+```console
+sudo install -d -o root -g root -m 0700 /root/lifepowerctl-assets-v0.1.0
+sudo install -o root -g root -m 0600 checksums.txt \
+  lifepowerctl_0.1.0_linux_arm64.tar.gz uninstall.sh \
+  /root/lifepowerctl-assets-v0.1.0/
+```
+
+Keep using the exact `install.sh` downloaded and verified for the same tag.
+The protected directory must not be a symlink or be group- or other-writable.
+
 ## Run the installer
 
 Interactive installation is preferred:
@@ -50,6 +65,16 @@ Interactive installation is preferred:
 ```console
 sudo sh ./install.sh
 ```
+
+To consume the protected local assets prepared above without another network
+download, use:
+
+```console
+sudo sh ./install.sh --asset-dir /root/lifepowerctl-assets-v0.1.0
+```
+
+Local assets pass the same size, checksum, archive, uninstaller, and embedded
+binary-identity checks as downloaded assets.
 
 The installer reports the fixed release, detected platform and board
 prerequisite, selected job account, proposed web-service lifecycle, and every
