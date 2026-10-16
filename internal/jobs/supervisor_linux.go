@@ -52,15 +52,17 @@ func (supervisor *Supervisor) Execute(ctx context.Context, request Request) (Exe
 	}
 	defer func() { supervisor.gate <- struct{}{} }()
 
-	_, err := supervisor.registry.MarkRunning(request)
-	if err != nil {
-		return Execution{}, err
-	}
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	supervisor.mu.Lock()
-	supervisor.active[request.RunID] = cancel
+	_, err := supervisor.registry.MarkRunning(request)
+	if err == nil {
+		supervisor.active[request.RunID] = cancel
+	}
 	supervisor.mu.Unlock()
+	if err != nil {
+		return Execution{}, err
+	}
 	defer func() {
 		supervisor.mu.Lock()
 		delete(supervisor.active, request.RunID)
