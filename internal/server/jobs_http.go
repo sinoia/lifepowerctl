@@ -631,9 +631,12 @@ func (app *application) parseJobForm(response http.ResponseWriter, request *http
 		app.errorPage(response, http.StatusForbidden, "Request rejected", "The request could not be verified. Return to the form and try again.")
 		return jobFormData{}, false
 	}
-	fields := []string{"csrf", "revision", "name", "enabled", "mode", "executable", "arguments", "command", "working_directory", "environment", "timeout_seconds", "stdout_bytes", "stderr_bytes"}
-	form, ok := app.parseForm(response, request, fields...)
+	fields := []string{"csrf", "revision", "name", "enabled", "mode", "working_directory", "environment", "timeout_seconds", "stdout_bytes", "stderr_bytes"}
+	form, ok := app.parseFormWithOptional(response, request, fields, []string{"executable", "arguments", "command"})
 	if !ok {
+		return jobFormData{}, false
+	}
+	if !app.requireJobExecutionFields(response, form) {
 		return jobFormData{}, false
 	}
 	session := sessionFromContext(request.Context())
@@ -654,9 +657,12 @@ func (app *application) parseAdHocForm(response http.ResponseWriter, request *ht
 		app.errorPage(response, http.StatusForbidden, "Request rejected", "The request could not be verified. Return to the form and try again.")
 		return jobFormData{}, false
 	}
-	fields := []string{"csrf", "name", "save", "mode", "executable", "arguments", "command", "working_directory", "environment", "timeout_seconds", "stdout_bytes", "stderr_bytes"}
-	values, ok := app.parseForm(response, request, fields...)
+	fields := []string{"csrf", "name", "save", "mode", "working_directory", "environment", "timeout_seconds", "stdout_bytes", "stderr_bytes"}
+	values, ok := app.parseFormWithOptional(response, request, fields, []string{"executable", "arguments", "command"})
 	if !ok {
+		return jobFormData{}, false
+	}
+	if !app.requireJobExecutionFields(response, values) {
 		return jobFormData{}, false
 	}
 	session := sessionFromContext(request.Context())
@@ -674,6 +680,25 @@ func (app *application) parseAdHocForm(response http.ResponseWriter, request *ht
 		WorkingDirectory: values.Get("working_directory"), Environment: values.Get("environment"), TimeoutSeconds: values.Get("timeout_seconds"),
 		StdoutBytes: values.Get("stdout_bytes"), StderrBytes: values.Get("stderr_bytes"),
 	}, true
+}
+
+func (app *application) requireJobExecutionFields(response http.ResponseWriter, values url.Values) bool {
+	var required []string
+	switch jobs.ExecutionMode(values.Get("mode")) {
+	case jobs.ModeDirect:
+		required = []string{"executable", "arguments"}
+	case jobs.ModeShell:
+		required = []string{"command"}
+	default:
+		return true
+	}
+	for _, field := range required {
+		if _, exists := values[field]; !exists {
+			app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form contained missing or repeated fields.")
+			return false
+		}
+	}
+	return true
 }
 
 func (form jobFormData) input() (jobs.DefinitionInput, error) {
