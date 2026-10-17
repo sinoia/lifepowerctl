@@ -27,8 +27,8 @@ On the selected GitHub release page, save `install.sh` and `checksums.txt` for
 the same immutable tag. Do not pipe a network response into `sudo sh`.
 
 ```console
-wget -O install.sh https://github.com/sinoia/lifepowerctl/releases/download/v0.2.0/install.sh
-wget -O checksums.txt https://github.com/sinoia/lifepowerctl/releases/download/v0.2.0/checksums.txt
+wget -O install.sh https://github.com/sinoia/lifepowerctl/releases/download/v0.3.0/install.sh
+wget -O checksums.txt https://github.com/sinoia/lifepowerctl/releases/download/v0.3.0/checksums.txt
 chmod 0600 install.sh
 grep ' install.sh$' checksums.txt
 sha256sum install.sh
@@ -37,7 +37,7 @@ sh ./install.sh --release-info
 less install.sh
 ```
 
-For a later release, replace `v0.2.0` in both URLs with that exact published
+For a later release, replace `v0.3.0` in both URLs with that exact published
 tag. If an exact URL does not resolve to a published release, stop. Compare the
 calculated digest with the single `install.sh` entry in `checksums.txt`. Then follow
 [Release verification](release-verification.md) to verify the GitHub
@@ -49,10 +49,10 @@ place the three assets consumed by the installer in a protected root-owned
 directory:
 
 ```console
-sudo install -d -o root -g root -m 0700 /root/lifepowerctl-assets-v0.2.0
+sudo install -d -o root -g root -m 0700 /root/lifepowerctl-assets-v0.3.0
 sudo install -o root -g root -m 0600 checksums.txt \
-  lifepowerctl_0.2.0_linux_arm64.tar.gz uninstall.sh \
-  /root/lifepowerctl-assets-v0.2.0/
+  lifepowerctl_0.3.0_linux_arm64.tar.gz uninstall.sh \
+  /root/lifepowerctl-assets-v0.3.0/
 ```
 
 Keep using the exact `install.sh` downloaded and verified for the same tag.
@@ -70,7 +70,7 @@ To consume the protected local assets prepared above without another network
 download, use:
 
 ```console
-sudo sh ./install.sh --asset-dir /root/lifepowerctl-assets-v0.2.0
+sudo sh ./install.sh --asset-dir /root/lifepowerctl-assets-v0.3.0
 ```
 
 Local assets pass the same size, checksum, archive, uninstaller, and embedded
