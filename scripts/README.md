@@ -11,7 +11,7 @@ directory, refuses to overwrite an existing version directory, and publishes
 nothing. Use it through:
 
 ```console
-make release VERSION=v0.1.0-rc.1
+make release VERSION=v0.2.0-rc.1
 ```
 
 `render-installer.sh` injects the reviewed config, systemd, tmpfiles, empty

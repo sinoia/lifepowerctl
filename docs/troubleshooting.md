@@ -16,7 +16,9 @@ If installed in on-demand mode, start it with
 `sudo systemctl start lifepowerctl.service`. For an SSH tunnel, “connection
 refused” commonly means SSH reached the Pi but nothing is listening on the
 forwarded Pi port. Confirm the service before changing firewall or bind
-settings.
+settings. Use the loopback port printed by the installer; it is also recorded
+in the root-only installer metadata. A manually edited port that differs from
+that metadata causes upgrade and uninstall health checks to refuse safely.
 
 ## The setup link is missing or expired
 

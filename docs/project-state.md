@@ -13,6 +13,13 @@ Bookworm scope.
 The public `main` branch is the development authority. First-release work is
 complete; intended later work is tracked in the [roadmap](roadmap.md).
 
+## Development since v0.1.0
+
+- The `v0.2.0` candidate adds an installer-selected unprivileged loopback web
+  port, closed lifecycle metadata for that port, port-aware health and recovery
+  checks, and compatible adoption of default or customized `v0.1.0`
+  installations.
+
 ## Implemented
 
 - Read-only board identity, telemetry, diagnostics, and a reviewed register

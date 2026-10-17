@@ -23,7 +23,7 @@ func TestInstallerClassifiesClosedPreservedRecord(t *testing.T) {
 	script := prefix + recoveryHarnessOverrides(paths) + `
 allow_downgrade=0
 load_installation_record
-printf '%s\n' "$installation_action|$installed_version|$installed_commit|$installed_job_user|$installed_web|$preserved_state_schema"
+printf '%s\n' "$installation_action|$installed_version|$installed_commit|$installed_job_user|$installed_web|$installed_port|$preserved_state_schema"
 `
 	path := filepath.Join(t.TempDir(), "classify-preserved.sh")
 	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
@@ -35,7 +35,7 @@ printf '%s\n' "$installation_action|$installed_version|$installed_commit|$instal
 	if err != nil {
 		t.Fatalf("classification: %v\n%s", err, output)
 	}
-	want := "restore|v0.0.9|" + oldCommit + "|tester|on-demand|1\n"
+	want := "restore|v0.0.9|" + oldCommit + "|tester|on-demand|8080|1\n"
 	if string(output) != want {
 		t.Fatalf("classification = %q, want %q", output, want)
 	}
@@ -195,7 +195,8 @@ func assertPreservedUninstalled(t *testing.T, fixture lifecycleFixture) {
 	}
 	record := readTestFile(t, filepath.Join(fixture.paths.metadata, "preserved"))
 	want := "format=1\nversion=v0.0.9\ncommit=" + strings.Repeat("1", 40) + "\njob_user=tester\nweb=enabled\nstate_schema=1\n"
-	if record != want {
+	migrated := "format=2\nversion=v0.0.9\ncommit=" + strings.Repeat("1", 40) + "\njob_user=tester\nweb=enabled\nport=8080\nstate_schema=1\n"
+	if record != want && record != migrated {
 		t.Fatalf("preserved record changed:\n%s", record)
 	}
 	for path, content := range map[string]string{

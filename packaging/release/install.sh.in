@@ -32,18 +32,20 @@ TRANSACTION_FILE="${METADATA_ROOT}/transaction"
 PREVIOUS_ROOT="${METADATA_ROOT}/previous"
 ROOT_UID=0
 ROOT_GID=0
+DEFAULT_WEB_PORT=8080
 
 usage() {
     printf '%s\n' \
         "LifePower Control installer ${RELEASE_VERSION}" '' 'Usage:' \
-        '  sudo sh ./install.sh [--job-user USER] [--web=enabled|on-demand] [--asset-dir DIRECTORY]' \
+        '  sudo sh ./install.sh [--job-user USER] [--web=enabled|on-demand] [--port PORT] [--asset-dir DIRECTORY]' \
         '  sudo sh ./install.sh [--allow-downgrade]' \
-        '  sudo sh ./install.sh --non-interactive --job-user USER --web=enabled|on-demand [--accept-existing-authority] [--allow-downgrade] [--asset-dir DIRECTORY]' \
+        '  sudo sh ./install.sh --non-interactive --job-user USER --web=enabled|on-demand [--port PORT] [--accept-existing-authority] [--allow-downgrade] [--asset-dir DIRECTORY]' \
         '  sudo sh ./install.sh --recover' \
         '  sh ./install.sh --release-info' '  sh ./install.sh --help' '' \
         'The fresh installer supports ARM64 Raspberry Pi OS 12 and 13. It uses' \
         'the existing vendor CLI, active daemon, and /dev/i2c-1; installs the' \
-        'sudo caller as job user by default; and enables web service on port 8080.' \
+        'sudo caller as job user by default; and enables web service on the' \
+        'selected loopback port (8080 by default).' \
         'It downloads only its embedded exact-version assets. --asset-dir uses' \
         'the same exact assets from a root-owned, non-writable local directory.' \
         'Existing installs' \
@@ -68,6 +70,13 @@ fail() { printf '%s\n' "install failed: $*" >&2; exit 1; }
 note() { printf '%s\n' "$*" >&2; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+validate_web_port() {
+    case "$1" in ''|*[!0-9]*) fail 'port must be a decimal integer between 1024 and 65535' ;; esac
+    case "$1" in 0|0*) fail 'port must use canonical decimal notation' ;; esac
+    [ "$1" -ge 1024 ] 2>/dev/null && [ "$1" -le 65535 ] || \
+        fail 'port must be a decimal integer between 1024 and 65535'
+}
+
 ask_yes() {
     printf '%s [y/N] ' "$1" >/dev/tty
     IFS= read -r answer </dev/tty || return 1
@@ -87,9 +96,9 @@ failure_point() { :; }
 write_transaction() {
     transaction_phase=$1
     transaction_new="${TRANSACTION_FILE}.new"
-    printf '%s\n' 'format=1' 'operation=fresh-install' \
+    printf '%s\n' 'format=2' 'operation=fresh-install' \
         "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
-        "job_user=$job_user" "web=$web_lifecycle" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
         "work_directory=$work_directory" "phase=$transaction_phase" >"$transaction_new"
     chmod 0600 "$transaction_new"
     mv -f -- "$transaction_new" "$TRANSACTION_FILE"
@@ -99,12 +108,12 @@ write_transaction() {
 write_lifecycle_transaction() {
     transaction_phase=$1
     transaction_new="${TRANSACTION_FILE}.new"
-    printf '%s\n' 'format=1' 'operation=lifecycle-update' \
+    printf '%s\n' 'format=2' 'operation=lifecycle-update' \
         "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
         "previous_version=$installed_version" "previous_commit=$installed_commit" \
-        "job_user=$job_user" "web=$web_lifecycle" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
         "work_directory=$work_directory" "phase=$transaction_phase" \
-        "previous_web_active=$current_web_active" \
+        "previous_web_active=$current_web_active" "previous_port=$installed_port" \
         "previous_schema_min=$previous_schema_minimum" \
         "previous_schema_current=$previous_schema_current" >"$transaction_new"
     chmod 0600 "$transaction_new"
@@ -116,10 +125,10 @@ write_lifecycle_transaction() {
 write_restore_transaction() {
     transaction_phase=$1
     transaction_new="${TRANSACTION_FILE}.new"
-    printf '%s\n' 'format=1' 'operation=preserved-reinstall' \
+    printf '%s\n' 'format=2' 'operation=preserved-reinstall' \
         "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
         "previous_version=$installed_version" "previous_commit=$installed_commit" \
-        "job_user=$job_user" "web=$web_lifecycle" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
         "state_schema=$preserved_state_schema" \
         "work_directory=$work_directory" "phase=$transaction_phase" >"$transaction_new"
     chmod 0600 "$transaction_new"
@@ -201,8 +210,12 @@ load_installation_record() {
         [ -f "$preserved_file" ] && [ ! -L "$preserved_file" ] || fail 'preserved-install record is unsafe'
         [ "$(stat -c '%u:%g:%a' "$preserved_file")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'preserved-install record ownership or mode is unsafe'
         [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = preserved ] || fail 'preserved installer metadata contains an unexpected entry'
-        [ "$(wc -l <"$preserved_file")" -eq 6 ] || fail 'preserved-install record has unexpected fields'
-        [ "$(record_value "$preserved_file" format)" = 1 ] || fail 'preserved-install record format is unsupported'
+        installed_format=$(record_value "$preserved_file" format)
+        case "$installed_format" in
+            1) [ "$(wc -l <"$preserved_file")" -eq 6 ] || fail 'preserved-install record has unexpected fields'; installed_port=$web_port ;;
+            2) [ "$(wc -l <"$preserved_file")" -eq 7 ] || fail 'preserved-install record has unexpected fields'; installed_port=$(record_value "$preserved_file" port); validate_web_port "$installed_port" ;;
+            *) fail 'preserved-install record format is unsupported' ;;
+        esac
         installed_version=$(record_value "$preserved_file" version)
         installed_commit=$(record_value "$preserved_file" commit)
         installed_job_user=$(record_value "$preserved_file" job_user)
@@ -219,13 +232,16 @@ load_installation_record() {
     [ -f "$installed_file" ] && [ ! -L "$installed_file" ] || fail 'installer metadata has no safe installed record; use the matching saved installer recovery procedure'
     [ "$(stat -c '%u:%g:%a' "$installed_file")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'installed record ownership or mode is unsafe'
     [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed ] || fail 'installer metadata contains an unexpected entry; use the matching saved installer recovery procedure'
-    [ "$(wc -l <"$installed_file")" -eq 5 ] || fail 'installed record has unexpected fields'
     installed_format=$(record_value "$installed_file" format)
+    case "$installed_format" in
+        1) [ "$(wc -l <"$installed_file")" -eq 5 ] || fail 'installed record has unexpected fields'; installed_port=$web_port ;;
+        2) [ "$(wc -l <"$installed_file")" -eq 6 ] || fail 'installed record has unexpected fields'; installed_port=$(record_value "$installed_file" port); validate_web_port "$installed_port" ;;
+        *) fail 'installed record format is unsupported' ;;
+    esac
     installed_version=$(record_value "$installed_file" version)
     installed_commit=$(record_value "$installed_file" commit)
     installed_job_user=$(record_value "$installed_file" job_user)
     installed_web=$(record_value "$installed_file" web)
-    [ "$installed_format" = 1 ] || fail 'installed record format is unsupported'
     printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'installed record version is invalid'
     printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'installed record commit is invalid'
     printf '%s\n' "$installed_job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'installed record job user is invalid'
@@ -302,19 +318,21 @@ transaction.new") ;;
             [ "$(stat -c '%u:%g:%a' "$transient")" = "$ROOT_UID:$ROOT_GID:600" ] || fail "recovery refused transient metadata ownership or mode: $transient"
         fi
     done
-    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 8 ] || fail 'transaction marker has unexpected fields'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 9 ] || fail 'transaction marker has unexpected fields'
     transaction_format=$(transaction_value format)
     transaction_operation=$(transaction_value operation)
     transaction_version=$(transaction_value version)
     transaction_commit=$(transaction_value commit)
     job_user=$(transaction_value job_user)
     web_lifecycle=$(transaction_value web)
+    web_port=$(transaction_value port)
     work_directory=$(transaction_value work_directory)
     transaction_phase=$(transaction_value phase)
-    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = fresh-install ] || fail 'transaction marker type is unsupported'
+    [ "$transaction_format" = 2 ] && [ "$transaction_operation" = fresh-install ] || fail 'transaction marker type is unsupported'
     [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'transaction marker belongs to a different installer release'
     printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'transaction marker contains an unsafe job user'
     case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'transaction marker contains an invalid web lifecycle' ;; esac
+    validate_web_port "$web_port"
     case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'transaction marker contains an unsafe work directory' ;; esac
     case "$transaction_phase" in metadata|service-group|jobs-group|service-user|memberships|policy|directories|payload|units|setup|enabled|started|healthy) ;; *) fail 'transaction marker contains an invalid phase' ;; esac
     if [ -e "$work_directory" ] || [ -L "$work_directory" ]; then
@@ -418,8 +436,15 @@ validate_previous_payload() {
     require_backup_file tmpfiles.conf 644
     require_backup_file sudoers 440
     require_backup_file installed 600
-    [ "$(wc -l <"$PREVIOUS_ROOT/installed")" -eq 5 ] || fail 'previous installed record has unexpected fields'
-    [ "$(record_value "$PREVIOUS_ROOT/installed" format)" = 1 ] || fail 'previous installed record format is unsupported'
+    previous_record_format=$(record_value "$PREVIOUS_ROOT/installed" format)
+    case "$previous_record_format" in
+        1) [ "$(wc -l <"$PREVIOUS_ROOT/installed")" -eq 5 ] || fail 'previous installed record has unexpected fields' ;;
+        2)
+            [ "$(wc -l <"$PREVIOUS_ROOT/installed")" -eq 6 ] || fail 'previous installed record has unexpected fields'
+            [ "$(record_value "$PREVIOUS_ROOT/installed" port)" = "$installed_port" ] || fail 'previous installed record port is inconsistent'
+            ;;
+        *) fail 'previous installed record format is unsupported' ;;
+    esac
     previous_machine=$(timeout 10 "$PREVIOUS_ROOT/lifepowerctl" version --machine) || fail 'previous executable cannot report machine metadata'
     require_machine_metadata_shape "$previous_machine" 'previous executable metadata'
     for expected in 'format=1' 'product=lifepowerctl' "version=$installed_version" "commit=$installed_commit" \
@@ -440,7 +465,7 @@ validate_lifecycle_recovery() {
     [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'installer metadata ownership or mode is unsafe'
     [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'lifecycle transaction marker is missing or unsafe'
     [ "$(stat -c '%u:%g:%a' "$TRANSACTION_FILE")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'lifecycle transaction marker ownership or mode is unsafe'
-    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 13 ] || fail 'lifecycle transaction marker has unexpected fields'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 15 ] || fail 'lifecycle transaction marker has unexpected fields'
     transaction_format=$(transaction_value format)
     transaction_operation=$(transaction_value operation)
     transaction_version=$(transaction_value version)
@@ -449,17 +474,22 @@ validate_lifecycle_recovery() {
     installed_commit=$(transaction_value previous_commit)
     job_user=$(transaction_value job_user)
     web_lifecycle=$(transaction_value web)
+    web_port=$(transaction_value port)
     work_directory=$(transaction_value work_directory)
     transaction_phase=$(transaction_value phase)
     current_web_active=$(transaction_value previous_web_active)
+    installed_port=$(transaction_value previous_port)
     previous_schema_minimum=$(transaction_value previous_schema_min)
     previous_schema_current=$(transaction_value previous_schema_current)
-    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = lifecycle-update ] || fail 'lifecycle transaction type is unsupported'
+    [ "$transaction_format" = 2 ] && [ "$transaction_operation" = lifecycle-update ] || fail 'lifecycle transaction type is unsupported'
     [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'lifecycle transaction belongs to a different installer release'
     printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'previous version in lifecycle transaction is invalid'
     printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'previous commit in lifecycle transaction is invalid'
     printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'lifecycle transaction job user is invalid'
     case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'lifecycle transaction web setting is invalid' ;; esac
+    validate_web_port "$web_port"
+    validate_web_port "$installed_port"
+    [ "$web_port" = "$installed_port" ] || fail 'lifecycle transaction changed the installation port'
     case "$current_web_active" in active|inactive) ;; *) fail 'lifecycle transaction web activity is invalid' ;; esac
     case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'lifecycle transaction work directory is unsafe' ;; esac
     case "$transaction_phase" in prepared|stopped|payload|units|started|healthy|committed) ;; *) fail 'lifecycle transaction phase is invalid' ;; esac
@@ -474,8 +504,12 @@ validate_lifecycle_recovery() {
     do [ -e "$METADATA_ROOT/$required_entry" ] && [ ! -L "$METADATA_ROOT/$required_entry" ] || fail "installer metadata is missing recovery entry: $required_entry"; done
     [ -f "$METADATA_ROOT/installed" ] && [ ! -L "$METADATA_ROOT/installed" ] || fail 'installed record is unsafe during lifecycle recovery'
     [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT/installed")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'installed record ownership or mode is unsafe during lifecycle recovery'
-    [ "$(wc -l <"$METADATA_ROOT/installed")" -eq 5 ] || fail 'installed record has unexpected fields during lifecycle recovery'
-    [ "$(record_value "$METADATA_ROOT/installed" format)" = 1 ] || fail 'installed record format is unsupported during lifecycle recovery'
+    recovery_record_format=$(record_value "$METADATA_ROOT/installed" format)
+    case "$recovery_record_format" in
+        1) [ "$(wc -l <"$METADATA_ROOT/installed")" -eq 5 ] || fail 'installed record has unexpected fields during lifecycle recovery' ;;
+        2) [ "$(wc -l <"$METADATA_ROOT/installed")" -eq 6 ] || fail 'installed record has unexpected fields during lifecycle recovery' ;;
+        *) fail 'installed record format is unsupported during lifecycle recovery' ;;
+    esac
     for transient in "$METADATA_ROOT/installed.new" "$METADATA_ROOT/transaction.new"
     do
         if [ -e "$transient" ] || [ -L "$transient" ]; then
@@ -491,6 +525,11 @@ validate_lifecycle_recovery() {
     esac
     [ "$(record_value "$METADATA_ROOT/installed" job_user)" = "$job_user" ] || fail 'installed record job user changed during lifecycle recovery'
     [ "$(record_value "$METADATA_ROOT/installed" web)" = "$web_lifecycle" ] || fail 'installed record web lifecycle changed during lifecycle recovery'
+    if [ "$recovery_record_format" = 2 ]; then
+        recovery_port=$(record_value "$METADATA_ROOT/installed" port)
+        validate_web_port "$recovery_port"
+        [ "$recovery_port" = "$web_port" ] || fail 'installed record port changed during lifecycle recovery'
+    fi
     if [ -e "$work_directory" ] || [ -L "$work_directory" ]; then
         [ -d "$work_directory" ] && [ ! -L "$work_directory" ] || fail 'lifecycle recovery work directory is unsafe'
         [ "$(stat -c '%u:%g:%a' "$work_directory")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'lifecycle recovery work-directory ownership or mode is unsafe'
@@ -593,7 +632,7 @@ validate_restore_recovery() {
     [ "$(stat -c '%u:%g:%a' "$METADATA_ROOT")" = "$ROOT_UID:$ROOT_GID:700" ] || fail 'preserved-reinstall metadata ownership or mode is unsafe'
     [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'preserved-reinstall transaction is missing or unsafe'
     [ "$(stat -c '%u:%g:%a' "$TRANSACTION_FILE")" = "$ROOT_UID:$ROOT_GID:600" ] || fail 'preserved-reinstall transaction ownership or mode is unsafe'
-    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 11 ] || fail 'preserved-reinstall transaction has unexpected fields'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 12 ] || fail 'preserved-reinstall transaction has unexpected fields'
     transaction_format=$(transaction_value format)
     transaction_operation=$(transaction_value operation)
     transaction_version=$(transaction_value version)
@@ -602,15 +641,17 @@ validate_restore_recovery() {
     installed_commit=$(transaction_value previous_commit)
     job_user=$(transaction_value job_user)
     web_lifecycle=$(transaction_value web)
+    web_port=$(transaction_value port)
     preserved_state_schema=$(transaction_value state_schema)
     work_directory=$(transaction_value work_directory)
     transaction_phase=$(transaction_value phase)
-    [ "$transaction_format" = 1 ] && [ "$transaction_operation" = preserved-reinstall ] || fail 'preserved-reinstall transaction type is unsupported'
+    [ "$transaction_format" = 2 ] && [ "$transaction_operation" = preserved-reinstall ] || fail 'preserved-reinstall transaction type is unsupported'
     [ "$transaction_version" = "$RELEASE_VERSION" ] && [ "$transaction_commit" = "$RELEASE_COMMIT" ] || fail 'preserved-reinstall transaction belongs to a different installer release'
     printf '%s\n' "$installed_version" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z][0-9A-Za-z.-]*)?$' || fail 'preserved-reinstall previous version is invalid'
     printf '%s\n' "$installed_commit" | grep -Eq '^[0-9a-f]{40}$' || fail 'preserved-reinstall previous commit is invalid'
     printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'preserved-reinstall job user is invalid'
     case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'preserved-reinstall web lifecycle is invalid' ;; esac
+    validate_web_port "$web_port"
     case "$preserved_state_schema" in ''|*[!0-9]*) fail 'preserved-reinstall durable schema is invalid' ;; esac
     case "$work_directory" in /tmp/lifepowerctl-install.*) ;; *) fail 'preserved-reinstall work directory is unsafe' ;; esac
     case "$transaction_phase" in prepared|payload|units|started|healthy|committed) ;; *) fail 'preserved-reinstall transaction phase is invalid' ;; esac
@@ -621,8 +662,15 @@ validate_restore_recovery() {
         if [ -e "$transient" ] || [ -L "$transient" ]; then
             [ -f "$transient" ] && [ ! -L "$transient" ] || fail "preserved-reinstall record is unsafe: $transient"
             [ "$(stat -c '%u:%g:%a' "$transient")" = "$ROOT_UID:$ROOT_GID:600" ] || fail "preserved-reinstall record ownership or mode is unsafe: $transient"
-            [ "$(wc -l <"$transient")" -eq 6 ] || fail "preserved-reinstall record has unexpected fields: $transient"
-            [ "$(record_value "$transient" format)" = 1 ] || fail "preserved-reinstall record format is unsupported: $transient"
+            transient_format=$(record_value "$transient" format)
+            case "$transient_format" in
+                1) [ "$(wc -l <"$transient")" -eq 6 ] || fail "preserved-reinstall record has unexpected fields: $transient" ;;
+                2)
+                    [ "$(wc -l <"$transient")" -eq 7 ] || fail "preserved-reinstall record has unexpected fields: $transient"
+                    [ "$(record_value "$transient" port)" = "$web_port" ] || fail "preserved-reinstall record port is inconsistent: $transient"
+                    ;;
+                *) fail "preserved-reinstall record format is unsupported: $transient" ;;
+            esac
             [ "$(record_value "$transient" version)" = "$installed_version" ] && \
                 [ "$(record_value "$transient" commit)" = "$installed_commit" ] && \
                 [ "$(record_value "$transient" job_user)" = "$job_user" ] && \
@@ -669,8 +717,9 @@ rollback_preserved_reinstall() {
     if [ -d "$POWER_RUNTIME_ROOT" ]; then rmdir "$POWER_RUNTIME_ROOT"; fi
     systemctl daemon-reload
     if [ ! -f "$METADATA_ROOT/preserved" ]; then
-        printf '%s\n' 'format=1' "version=$installed_version" "commit=$installed_commit" \
-            "job_user=$job_user" "web=$web_lifecycle" "state_schema=$preserved_state_schema" >"$METADATA_ROOT/preserved.new"
+        printf '%s\n' 'format=2' "version=$installed_version" "commit=$installed_commit" \
+            "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
+            "state_schema=$preserved_state_schema" >"$METADATA_ROOT/preserved.new"
         chmod 0600 "$METADATA_ROOT/preserved.new"
         mv -f -- "$METADATA_ROOT/preserved.new" "$METADATA_ROOT/preserved"
     fi
@@ -845,7 +894,7 @@ check_fresh_destinations() {
         "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
         "$TMPFILES_POLICY" "$SUDOERS_POLICY"
     do require_fresh_path "$path"; done
-    if ss -H -ltn 'sport = :8080' | grep -q .; then fail 'TCP port 8080 is already listening'; fi
+    if ss -H -ltn "sport = :$web_port" | grep -q .; then fail "TCP port $web_port is already listening"; fi
 }
 
 require_owned_file() {
@@ -964,12 +1013,12 @@ check_preserved_destinations() {
         "$SYSTEMD_ROOT/lifepowerctl-poweroff.path" \
         "$TMPFILES_POLICY" "$SUDOERS_POLICY"
     do [ ! -e "$path" ] && [ ! -L "$path" ] || fail "preserved reinstall found unexpected package machinery: $path"; done
-    if ss -H -ltn 'sport = :8080' | grep -q .; then fail 'TCP port 8080 is already listening'; fi
+    if ss -H -ltn "sport = :$web_port" | grep -q .; then fail "TCP port $web_port is already listening"; fi
 }
 
 check_web_health() {
-    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null http://127.0.0.1:8080/healthz
-    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null http://127.0.0.1:8080/healthz
+    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null "http://127.0.0.1:$web_port/healthz"
+    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null "http://127.0.0.1:$web_port/healthz"
     fi
 }
 
@@ -1195,7 +1244,9 @@ prepare_policy() {
     controller_uid=$(id -u "$SERVICE_USER")
     policy="$work_directory/policy"
     mkdir "$policy"
-    render_asset embedded_config "$policy/config.json"
+    render_asset embedded_config "$policy/config.json.in"
+    sed "s/@WEB_PORT@/$web_port/g" "$policy/config.json.in" >"$policy/config.json"
+    rm -f -- "$policy/config.json.in"
     render_asset embedded_controller_unit "$policy/lifepowerctl-controller.service"
     render_asset embedded_runner_unit "$policy/lifepowerctl-job-runner.service"
     render_asset embedded_poweroff_unit "$policy/lifepowerctl-poweroff.service"
@@ -1303,8 +1354,8 @@ mutate_fresh() {
     [ "$health_ready" -eq 1 ] || fail 'services did not reach the expected ready, board-ready, safe-idle state within 44 seconds'
     check_web_health || fail 'web health endpoint did not become ready'
     write_transaction healthy
-    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
-        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    printf '%s\n' 'format=2' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" >"$METADATA_ROOT/installed.new"
     chmod 0600 "$METADATA_ROOT/installed.new"
     mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
     rm -f -- "$TRANSACTION_FILE"
@@ -1351,8 +1402,8 @@ mutate_lifecycle() {
         "$minimum_schema" "$state_schema" || fail 'updated services did not reach the expected healthy, board-ready, maintenance-safe state'
     write_lifecycle_transaction healthy
 
-    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
-        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    printf '%s\n' 'format=2' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" >"$METADATA_ROOT/installed.new"
     chmod 0600 "$METADATA_ROOT/installed.new"
     mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
     write_lifecycle_transaction committed
@@ -1396,8 +1447,8 @@ mutate_restore() {
     wait_for_installed_health "$RELEASE_VERSION" "$RELEASE_COMMIT" "$work_directory/status" \
         "$minimum_schema" "$state_schema" || fail 'restored services did not reach the expected healthy, board-ready, maintenance-safe state'
     write_restore_transaction healthy
-    printf '%s\n' 'format=1' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
-        "job_user=$job_user" "web=$web_lifecycle" >"$METADATA_ROOT/installed.new"
+    printf '%s\n' 'format=2' "version=$RELEASE_VERSION" "commit=$RELEASE_COMMIT" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" >"$METADATA_ROOT/installed.new"
     chmod 0600 "$METADATA_ROOT/installed.new"
     rm -f -- "$METADATA_ROOT/preserved"
     mv -f -- "$METADATA_ROOT/installed.new" "$METADATA_ROOT/installed"
@@ -1410,9 +1461,10 @@ mutate_restore() {
 # The renderer replaces this marker with reviewed policy-printing functions.
 # @EMBED_POLICY_FUNCTIONS@
 
-non_interactive=0; accept_authority=0; development_host=0; web_explicit=0; allow_downgrade=0
+non_interactive=0; accept_authority=0; development_host=0; web_explicit=0; port_explicit=0; allow_downgrade=0
 web_lifecycle=enabled; job_user=''; install_complete=0; rollback_authorized=0
-work_directory=''; asset_directory=''; installation_action=fresh; rollback_kind=''; lifecycle_backup_started=0; preserved_state_schema=''
+web_port=$DEFAULT_WEB_PORT; installed_port=''; installed_format=''; work_directory=''; asset_directory=''; installation_action=fresh
+rollback_kind=''; lifecycle_backup_started=0; preserved_state_schema=''
 
 if [ "${1-}" = --help ] || [ "${1-}" = -h ]; then [ "$#" -eq 1 ] || { usage >&2; exit 2; }; usage; exit 0; fi
 if [ "${1-}" = --release-info ]; then [ "$#" -eq 1 ] || { usage >&2; exit 2; }; release_info; exit 0; fi
@@ -1428,12 +1480,16 @@ while [ "$#" -gt 0 ]; do
         --job-user) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; job_user=$2; shift ;;
         --job-user=*) job_user=${1#*=} ;;
         --web=enabled|--web=on-demand) web_lifecycle=${1#*=}; web_explicit=1 ;;
+        --port) [ "$#" -ge 2 ] || { usage >&2; exit 2; }; web_port=$2; port_explicit=1; shift ;;
+        --port=*) web_port=${1#*=}; port_explicit=1 ;;
         *) usage >&2; exit 2 ;;
     esac
     shift
 done
 requested_job_user=$job_user
 requested_web=$web_lifecycle
+requested_port=$web_port
+validate_web_port "$requested_port"
 if [ "$non_interactive" -eq 1 ] && [ -z "$requested_job_user" ]; then fail '--job-user is required with --non-interactive'; fi
 if [ "$non_interactive" -eq 1 ] && [ "$web_explicit" -ne 1 ]; then fail '--web=enabled or --web=on-demand is required with --non-interactive'; fi
 [ "$(id -u)" -eq 0 ] || fail 'root is required; inspect the saved script, then run sudo sh ./install.sh'
@@ -1441,8 +1497,12 @@ load_installation_record
 if [ "$installation_action" != fresh ]; then
     if [ -n "$requested_job_user" ] && [ "$requested_job_user" != "$installed_job_user" ]; then fail "installed job user is $installed_job_user; changing it is not supported by this installer"; fi
     if [ "$web_explicit" -eq 1 ] && [ "$requested_web" != "$installed_web" ]; then fail "installed web lifecycle is $installed_web; changing it is not supported during verification or update"; fi
+    if [ "$installed_format" = 2 ] && [ "$port_explicit" -eq 1 ] && [ "$requested_port" != "$installed_port" ]; then
+        fail "installed web port is $installed_port; changing it is not supported during verification or update"
+    fi
     job_user=$installed_job_user
     web_lifecycle=$installed_web
+    web_port=$installed_port
 elif [ -z "$job_user" ]; then
     [ "$non_interactive" -eq 0 ] || fail '--job-user is required with --non-interactive'
     job_user=${SUDO_USER-}
@@ -1453,6 +1513,7 @@ note "LifePower Control ${RELEASE_VERSION}"
 note "Source: https://github.com/${REPOSITORY}"
 note "Exact assets: ${RELEASE_BASE_URL}"
 note "Web lifecycle: ${web_lifecycle}"
+note "Web endpoint: http://127.0.0.1:${web_port}/"
 preflight
 if [ "$installation_action" = same-version ]; then
     note "LifePower Control ${RELEASE_VERSION} is already installed, healthy, and maintenance-safe; no files or services were changed."
@@ -1473,11 +1534,11 @@ note "LifePower Control ${RELEASE_VERSION} $installation_action completed succes
 note "Installed and running version: ${RELEASE_VERSION} (${RELEASE_COMMIT})"
 note 'Services: job runner, controller, and web are ready; board is ready; maintenance is safe.'
 if [ "$installation_action" = restore ]; then
-    note 'Local administration URL: http://127.0.0.1:8080/ (existing authentication data was preserved).'
+    note "Local administration URL: http://127.0.0.1:${web_port}/ (existing authentication data was preserved)."
 else
-    note 'Local setup URL: http://127.0.0.1:8080/ (use the one-time setup link printed above).'
+    note "Local setup URL: http://127.0.0.1:${web_port}/ (use the one-time setup link printed above)."
 fi
-note 'Remote browser tunnel: ssh -N -L 8080:127.0.0.1:8080 USER@PI-HOST'
+note "Remote browser tunnel: ssh -N -L ${web_port}:127.0.0.1:${web_port} USER@PI-HOST"
 note "Selected job identity: $job_user (inherited authority was reported before confirmation)."
 note 'Logs: sudo journalctl -u lifepowerctl-controller -u lifepowerctl-job-runner -u lifepowerctl'
 note 'Uninstall (data preserving): sudo /usr/lib/lifepowerctl/uninstall.sh'

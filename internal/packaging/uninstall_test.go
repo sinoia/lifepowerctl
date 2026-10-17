@@ -43,6 +43,28 @@ func TestUninstallerRendersExactMetadataAndSafetyContract(t *testing.T) {
 	}
 }
 
+func TestUninstallerChecksRecordedPort(t *testing.T) {
+	work := t.TempDir()
+	logPath := filepath.Join(work, "wget.log")
+	script := uninstallerPrefix(t) + `
+web_port=18082
+have() { [ "$1" = wget ]; }
+timeout() { shift; "$@"; }
+wget() { printf '%s\n' "$*" >"$TEST_LOG"; }
+check_web_health
+grep -Fq 'http://127.0.0.1:18082/healthz' "$TEST_LOG"
+`
+	path := filepath.Join(work, "health.sh")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("/bin/sh", path)
+	command.Env = append(os.Environ(), "TEST_LOG="+logPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("recorded port was not checked: %v\n%s", err, output)
+	}
+}
+
 func TestUninstallPreservesDataAndLeavesClosedRecord(t *testing.T) {
 	fixture := newUninstallFixture(t)
 	script := uninstallHarness(t, fixture, `
@@ -52,6 +74,7 @@ installed_version="`+testReleaseVersion+`"
 installed_commit="`+testReleaseCommit+`"
 job_user=tester
 web_lifecycle=enabled
+web_port=18081
 current_web_active=active
 state_schema=1
 uninstall_preserving_data
@@ -65,7 +88,7 @@ uninstall_preserving_data
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := "format=1\nversion=" + testReleaseVersion + "\ncommit=" + testReleaseCommit + "\njob_user=tester\nweb=enabled\nstate_schema=1\n"
+	expected := "format=2\nversion=" + testReleaseVersion + "\ncommit=" + testReleaseCommit + "\njob_user=tester\nweb=enabled\nport=18081\nstate_schema=1\n"
 	if string(record) != expected {
 		t.Fatalf("unexpected preserved record:\n%s", record)
 	}
@@ -387,7 +410,7 @@ func newUninstallFixture(t *testing.T) uninstallFixture {
 		f.tmpfiles: "tmpfiles\n", f.sudoers: "sudoers\n", filepath.Join(f.config, "config.json"): "config\n",
 		filepath.Join(f.state, "state.json"): "state\n", filepath.Join(f.state, "activity", "activity.jsonl"): "activity\n",
 		filepath.Join(f.jobs, "jobs.json"): "jobs\n", filepath.Join(f.jobs, "output", "run.log"): "output\n",
-		filepath.Join(f.metadata, "installed"): "format=1\nversion=" + testReleaseVersion + "\ncommit=" + testReleaseCommit + "\njob_user=tester\nweb=enabled\n",
+		filepath.Join(f.metadata, "installed"): "format=2\nversion=" + testReleaseVersion + "\ncommit=" + testReleaseCommit + "\njob_user=tester\nweb=enabled\nport=8080\n",
 	}
 	for path, value := range files {
 		mode := os.FileMode(0o644)
@@ -428,6 +451,7 @@ TEST_RUNTIME=%s
 TEST_POWER_RUNTIME=%s
 PATH=%s:"$PATH"
 export TEST_RUNTIME TEST_POWER_RUNTIME PATH
+web_port=8080
 install() {
     mode=0755; directory=0
     while [ "$#" -gt 0 ]; do

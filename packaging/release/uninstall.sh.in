@@ -53,6 +53,12 @@ note() { printf '%s\n' "$*"; }
 fail() { printf '%s\n' "uninstall failed: $*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 
+validate_web_port() {
+    case "$1" in ''|*[!0-9]*) fail 'installed web port is invalid' ;; esac
+    case "$1" in 0|0*) fail 'installed web port is invalid' ;; esac
+    [ "$1" -ge 1024 ] 2>/dev/null && [ "$1" -le 65535 ] || fail 'installed web port is invalid'
+}
+
 record_value() {
     record_file=$1
     record_key=$2
@@ -90,15 +96,17 @@ validate_installed_record() {
     [ "$(stat -c '%U:%G:%a' "$METADATA_ROOT")" = root:root:700 ] || fail 'installer metadata ownership or mode is unexpected'
     [ "$(find "$METADATA_ROOT" -mindepth 1 -maxdepth 1 -printf '%f\n')" = installed ] || fail 'installer metadata contains interrupted or foreign state; use the matching recovery procedure'
     require_owned_file "$INSTALLED_RECORD" root root 600
-    [ "$(wc -l <"$INSTALLED_RECORD")" -eq 5 ] || fail 'installed record has unexpected fields'
-    [ "$(record_value "$INSTALLED_RECORD" format)" = 1 ] || fail 'installed record format is unsupported'
+    [ "$(wc -l <"$INSTALLED_RECORD")" -eq 6 ] || fail 'installed record has unexpected fields'
+    [ "$(record_value "$INSTALLED_RECORD" format)" = 2 ] || fail 'installed record format is unsupported'
     installed_version=$(record_value "$INSTALLED_RECORD" version)
     installed_commit=$(record_value "$INSTALLED_RECORD" commit)
     job_user=$(record_value "$INSTALLED_RECORD" job_user)
     web_lifecycle=$(record_value "$INSTALLED_RECORD" web)
+    web_port=$(record_value "$INSTALLED_RECORD" port)
     [ "$installed_version" = "$RELEASE_VERSION" ] && [ "$installed_commit" = "$RELEASE_COMMIT" ] || fail 'this uninstaller does not match the installed release'
     printf '%s\n' "$job_user" | grep -Eq '^[a-z_][a-z0-9_-]{0,31}$' || fail 'installed job user is unsafe'
     case "$web_lifecycle" in enabled|on-demand) ;; *) fail 'installed web lifecycle is invalid' ;; esac
+    validate_web_port "$web_port"
 }
 
 validate_accounts() {
@@ -188,8 +196,8 @@ validate_layout() {
 }
 
 check_web_health() {
-    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null http://127.0.0.1:8080/healthz
-    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null http://127.0.0.1:8080/healthz
+    if have wget; then timeout 10 wget -q --max-redirect=0 -O /dev/null "http://127.0.0.1:$web_port/healthz"
+    else timeout 10 curl --fail --silent --show-error --max-time 8 --max-redirs 0 --output /dev/null "http://127.0.0.1:$web_port/healthz"
     fi
 }
 
@@ -236,8 +244,9 @@ preflight() {
 
 write_transaction() {
     transaction_phase=$1
-    printf '%s\n' 'format=1' 'operation=uninstall' "version=$installed_version" "commit=$installed_commit" \
-        "job_user=$job_user" "web=$web_lifecycle" "web_active=$current_web_active" "phase=$transaction_phase" >"$TRANSACTION_FILE.new"
+    printf '%s\n' 'format=2' 'operation=uninstall' "version=$installed_version" "commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
+        "web_active=$current_web_active" "phase=$transaction_phase" >"$TRANSACTION_FILE.new"
     chmod 0600 "$TRANSACTION_FILE.new"
     mv -f -- "$TRANSACTION_FILE.new" "$TRANSACTION_FILE"
 }
@@ -324,8 +333,9 @@ rollback_on_exit() {
 failure_point() { :; }
 
 write_preserved_record() {
-    printf '%s\n' 'format=1' "version=$installed_version" "commit=$installed_commit" \
-        "job_user=$job_user" "web=$web_lifecycle" "state_schema=$state_schema" >"$PRESERVED_RECORD.new"
+    printf '%s\n' 'format=2' "version=$installed_version" "commit=$installed_commit" \
+        "job_user=$job_user" "web=$web_lifecycle" "port=$web_port" \
+        "state_schema=$state_schema" >"$PRESERVED_RECORD.new"
     chmod 0600 "$PRESERVED_RECORD.new"
 }
 
@@ -376,15 +386,17 @@ load_recovery() {
     [ "$(id -u)" -eq 0 ] || fail 'root is required for uninstall recovery'
     [ -f "$TRANSACTION_FILE" ] && [ ! -L "$TRANSACTION_FILE" ] || fail 'no safe interrupted-uninstall transaction was found'
     [ "$(stat -c '%U:%G:%a' "$TRANSACTION_FILE")" = root:root:600 ] || fail 'uninstall transaction ownership or mode is unsafe'
-    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 8 ] || fail 'uninstall transaction has unexpected fields'
-    [ "$(record_value "$TRANSACTION_FILE" format)" = 1 ] && [ "$(record_value "$TRANSACTION_FILE" operation)" = uninstall ] || fail 'uninstall transaction is unsupported'
+    [ "$(wc -l <"$TRANSACTION_FILE")" -eq 9 ] || fail 'uninstall transaction has unexpected fields'
+    [ "$(record_value "$TRANSACTION_FILE" format)" = 2 ] && [ "$(record_value "$TRANSACTION_FILE" operation)" = uninstall ] || fail 'uninstall transaction is unsupported'
     installed_version=$(record_value "$TRANSACTION_FILE" version)
     installed_commit=$(record_value "$TRANSACTION_FILE" commit)
     job_user=$(record_value "$TRANSACTION_FILE" job_user)
     web_lifecycle=$(record_value "$TRANSACTION_FILE" web)
+    web_port=$(record_value "$TRANSACTION_FILE" port)
     current_web_active=$(record_value "$TRANSACTION_FILE" web_active)
     [ "$installed_version" = "$RELEASE_VERSION" ] && [ "$installed_commit" = "$RELEASE_COMMIT" ] || fail 'recovery uninstaller does not match the interrupted release'
     case "$web_lifecycle:$current_web_active" in enabled:active|on-demand:active|on-demand:inactive) ;; *) fail 'uninstall recovery service state is invalid' ;; esac
+    validate_web_port "$web_port"
     validate_accounts
     validate_recovery_backup
     restore_uninstall
@@ -452,6 +464,6 @@ main() {
 }
 
 rollback_authorized=0
-installed_version=''; installed_commit=''; job_user=''; web_lifecycle=''; current_web_active=''; state_schema=''
+installed_version=''; installed_commit=''; job_user=''; web_lifecycle=''; web_port=''; current_web_active=''; state_schema=''
 
 main "$@"

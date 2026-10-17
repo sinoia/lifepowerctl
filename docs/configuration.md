@@ -26,8 +26,10 @@ The installed defaults are:
 }
 ```
 
-The installer substitutes the actual selected account and UID. Do not copy
-the example over an installed configuration.
+The installer substitutes the actual selected account, UID, and installation
+port. Port `8080` is the default; `sudo sh ./install.sh --port 18081` creates a
+fresh loopback configuration using port `18081`. Do not copy the example over
+an installed configuration.
 
 ## Network settings
 
@@ -63,6 +65,13 @@ Before editing, back up the file while preserving its permissions. Validate
 JSON and inspect the affected units. Restart the web service for listener and
 origin changes; controller-related paths require a carefully planned service
 restart while automation is disabled and idle.
+
+The release lifecycle records the installation port for bounded health and
+recovery checks. Do not change `listen_address` or its matching
+`external_origin` port by hand after installation; doing so leaves installer
+metadata inconsistent. A `v0.1.0` installation that was already customized by
+hand can adopt that existing port during its first upgrade by passing the same
+`--port PORT` value to the new installer.
 
 ```console
 sudo systemctl restart lifepowerctl.service

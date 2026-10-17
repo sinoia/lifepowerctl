@@ -2,7 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-13
-- Amended: 2026-10-15 after fixed-path package and hardware acceptance
+- Amended: 2026-10-17 for configurable installation ports
 
 ## Context
 
@@ -81,7 +81,19 @@ The installed identity and layout are:
 
 The interactive fresh-install default enables the web service continuously so
 the setup journey works immediately. The owner may explicitly choose an
-on-demand web lifecycle. Reinstall and upgrade preserve that choice.
+on-demand web lifecycle. Reinstall and upgrade preserve that choice. The web
+listener remains on `127.0.0.1`; the installer accepts an explicit
+unprivileged port from `1024` through `65535` and otherwise defaults to
+`8080`. It renders the same port into the listen address and external origin.
+
+The selected port is part of the closed root-only installed, transaction,
+rollback, preserved-uninstall, and recovery metadata. Collision checks,
+current-service verification, target verification, rollback, uninstall, and
+reinstall health checks use that recorded port. Routine lifecycle updates do
+not rewrite preserved configuration or change a recorded port. Legacy
+`v0.1.0` metadata has no port field and defaults to `8080`; the first upgrade
+may explicitly adopt an already customized loopback port only after proving
+the current endpoint healthy on that port.
 
 ### Safe lifecycle operations
 
@@ -136,6 +148,13 @@ recreates and validates both through the tmpfiles policy.
   operation an implicit hardware and power-state workflow.
 - **Reset setup on every install:** destroys an existing authentication
   boundary and sessions during otherwise routine maintenance.
+- **Infer the lifecycle port from JSON with shell text matching:** cannot
+  safely parse every valid strict-JSON formatting choice. Closed metadata
+  keeps recovery deterministic; the explicit legacy adoption path handles an
+  existing `v0.1.0` customization.
+- **Allow arbitrary or privileged listener ports:** would either broaden the
+  network boundary or depend on host-specific privileged-port policy. The
+  installer retains loopback and the ordinary unprivileged range.
 - **Delete data during uninstall:** makes a reversible package removal
   unnecessarily destructive.
 - **Adopt a Debian package or installer framework now:** adds packaging and
