@@ -13,12 +13,12 @@ directly to the Internet.
 
 ## Release status
 
-`v0.1.0` is the first supported release. Install only a version shown as
+`v0.2.0` is the current supported release. Install only a version shown as
 published on this repository's GitHub Releases page. Draft releases,
 development builds, and locally rendered assets are not supported production
 downloads.
 
-The first release targets:
+The release targets:
 
 - LiFePO4wered/Pi+ hardware supported by the manufacturer's software;
 - Raspberry Pi OS Lite 64-bit Trixie as the primary platform;
@@ -28,8 +28,7 @@ The first release targets:
   paths.
 
 ARMv7/32-bit Raspberry Pi OS, generic Debian ARM64 systems, other UPS boards,
-containers, and direct Internet exposure are not supported by the first
-release.
+containers, and direct Internet exposure are not supported by this release.
 
 ## Interface preview
 

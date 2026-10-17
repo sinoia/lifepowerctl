@@ -2,23 +2,16 @@
 
 Last updated: 2026-10-17
 
-[`v0.1.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.1.0) is the
-first supported public release. Its immutable ARM64 assets were built from
-commit `fed43f90c744346062a371c5a792da448370f0ab` by the protected release
-workflow. Hosted validation, checksums, SPDX SBOM, attestations, independent
-asset verification, exact target acceptance, and anonymous exact-version and
-latest-release download checks pass for the declared Trixie and legacy
-Bookworm scope.
+[`v0.2.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.2.0) is the
+current supported public release. Its immutable ARM64 assets were built from
+commit `45ed87be81e96fdc3a89340baad9ca794d4762e5` by the protected release
+workflow. Hosted validation, checksums, SPDX SBOM, provenance and SBOM
+attestations, independent asset verification, and anonymous exact-version and
+latest-release download checks pass. The declared Trixie and legacy Bookworm
+hardware scope is unchanged from the accepted `v0.1.0` baseline.
 
-The public `main` branch is the development authority. First-release work is
-complete; intended later work is tracked in the [roadmap](roadmap.md).
-
-## Development since v0.1.0
-
-- The `v0.2.0` candidate adds an installer-selected unprivileged loopback web
-  port, closed lifecycle metadata for that port, port-aware health and recovery
-  checks, and compatible adoption of default or customized `v0.1.0`
-  installations.
+The public `main` branch is the development authority. Intended later work is
+tracked in the [roadmap](roadmap.md).
 
 ## Implemented
 
@@ -39,8 +32,11 @@ complete; intended later work is tracked in the [roadmap](roadmap.md).
 - Exact-version ARM64 archive, transactional installer, compatible upgrade and
   rollback, interrupted-operation recovery, data-preserving uninstall, and
   separately confirmed purge.
+- Installer-selected unprivileged loopback web ports, closed lifecycle metadata
+  for the selected port, port-aware health and recovery checks, and compatible
+  adoption of default or customized `v0.1.0` installations.
 
-## Supported first-release scope
+## Supported release scope
 
 - LiFePO4wered/Pi+ with the standard manufacturer daemon and CLI.
 - Raspberry Pi OS Lite 64-bit Trixie, with 64-bit Bookworm retained as a legacy
