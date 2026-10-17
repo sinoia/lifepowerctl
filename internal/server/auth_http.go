@@ -224,6 +224,10 @@ func sameOriginURL(supplied string, expected *url.URL) bool {
 }
 
 func (app *application) parseForm(response http.ResponseWriter, request *http.Request, fields ...string) (url.Values, bool) {
+	return app.parseFormWithOptional(response, request, fields, nil)
+}
+
+func (app *application) parseFormWithOptional(response http.ResponseWriter, request *http.Request, required, optional []string) (url.Values, bool) {
 	mediaType := strings.ToLower(strings.TrimSpace(strings.SplitN(request.Header.Get("Content-Type"), ";", 2)[0]))
 	if mediaType != "application/x-www-form-urlencoded" {
 		app.errorPage(response, http.StatusUnsupportedMediaType, "Unsupported form", "Submit the application-generated form without changing its encoding.")
@@ -234,11 +238,28 @@ func (app *application) parseForm(response http.ResponseWriter, request *http.Re
 		app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form was invalid or too large.")
 		return nil, false
 	}
-	if len(request.PostForm) > maxFormFields || len(request.PostForm) != len(fields) {
+	allowed := make(map[string]struct{}, len(required)+len(optional))
+	for _, field := range required {
+		allowed[field] = struct{}{}
+	}
+	for _, field := range optional {
+		allowed[field] = struct{}{}
+	}
+	if len(request.PostForm) > maxFormFields {
 		app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form contained unexpected fields.")
 		return nil, false
 	}
-	for _, field := range fields {
+	for field, values := range request.PostForm {
+		if _, exists := allowed[field]; !exists {
+			app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form contained unexpected fields.")
+			return nil, false
+		}
+		if len(values) != 1 {
+			app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form contained missing or repeated fields.")
+			return nil, false
+		}
+	}
+	for _, field := range required {
 		values, exists := request.PostForm[field]
 		if !exists || len(values) != 1 {
 			app.errorPage(response, http.StatusBadRequest, "Invalid form", "The submitted form contained missing or repeated fields.")

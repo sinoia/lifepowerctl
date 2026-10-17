@@ -1135,7 +1135,7 @@ func TestSavedJobCreateEditDeleteAndActivity(t *testing.T) {
 	handler, _, session, _ := newTestServer(t, true)
 	jobForm := url.Values{
 		"csrf": {session.CSRFToken}, "revision": {"0"}, "name": {"Take photograph"}, "enabled": {"true"},
-		"mode": {"direct"}, "executable": {"/home/pi/bin/capture"}, "arguments": {"--once\n--quiet"}, "command": {""},
+		"mode": {"direct"}, "executable": {"/home/pi/bin/capture"}, "arguments": {"--once\n--quiet"},
 		"working_directory": {"/home/pi"}, "environment": {"CAMERA=front"}, "timeout_seconds": {"60"},
 		"stdout_bytes": {"1048576"}, "stderr_bytes": {"1048576"},
 	}
@@ -1281,7 +1281,7 @@ func TestDirectJobWithoutArgumentsRemainsValid(t *testing.T) {
 	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
 	form := url.Values{
 		"csrf": {session.CSRFToken}, "revision": {"0"}, "name": {"No arguments"}, "enabled": {"true"},
-		"mode": {"direct"}, "executable": {"/bin/true"}, "arguments": {""}, "command": {""},
+		"mode": {"direct"}, "executable": {"/bin/true"}, "arguments": {""},
 		"working_directory": {"/tmp"}, "environment": {""}, "timeout_seconds": {"30"},
 		"stdout_bytes": {"1024"}, "stderr_bytes": {"1024"},
 	}
@@ -1291,12 +1291,63 @@ func TestDirectJobWithoutArgumentsRemainsValid(t *testing.T) {
 	}
 }
 
+func TestShellJobBrowserFormCreatesAndUpdatesWithoutDirectFields(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	form := url.Values{
+		"csrf": {session.CSRFToken}, "revision": {"0"}, "name": {"Shell browser form"}, "enabled": {"true"},
+		"mode": {"shell"}, "command": {"printf first"}, "working_directory": {"/tmp"}, "environment": {""},
+		"timeout_seconds": {"30"}, "stdout_bytes": {"1024"}, "stderr_bytes": {"1024"},
+	}
+	created := postForm(handler, "/jobs", form, cookie)
+	if created.Code != http.StatusSeeOther {
+		t.Fatalf("shell create response = %d: %s", created.Code, created.Body.String())
+	}
+	list := request(handler, http.MethodGet, "/jobs", nil, cookie)
+	match := regexp.MustCompile(`/jobs/([0-9a-f]{32})/edit`).FindStringSubmatch(list.Body.String())
+	if len(match) != 2 {
+		t.Fatalf("created shell job link missing: %s", list.Body.String())
+	}
+	form.Set("revision", "1")
+	form.Set("command", "printf second")
+	updated := postForm(handler, "/jobs/"+match[1], form, cookie)
+	if updated.Code != http.StatusSeeOther {
+		t.Fatalf("shell update response = %d: %s", updated.Code, updated.Body.String())
+	}
+}
+
+func TestJobBrowserFormStillRejectsUnexpectedRepeatedAndMissingFields(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	form := url.Values{
+		"csrf": {session.CSRFToken}, "revision": {"0"}, "name": {"Strict browser form"}, "enabled": {"true"},
+		"mode": {"shell"}, "command": {"printf strict"}, "working_directory": {"/tmp"}, "environment": {""},
+		"timeout_seconds": {"30"}, "stdout_bytes": {"1024"}, "stderr_bytes": {"1024"},
+	}
+	form.Set("unexpected", "value")
+	response := postForm(handler, "/jobs", form, cookie)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "unexpected fields") {
+		t.Fatalf("unexpected-field response = %d: %s", response.Code, response.Body.String())
+	}
+	form.Del("unexpected")
+	form["command"] = []string{"printf first", "printf second"}
+	response = postForm(handler, "/jobs", form, cookie)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "missing or repeated fields") {
+		t.Fatalf("repeated-field response = %d: %s", response.Code, response.Body.String())
+	}
+	form.Del("command")
+	response = postForm(handler, "/jobs", form, cookie)
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "missing or repeated fields") {
+		t.Fatalf("missing-mode-field response = %d: %s", response.Code, response.Body.String())
+	}
+}
+
 func TestAdHocRunOnlyAndSaveThenRun(t *testing.T) {
 	handler, _, session, _ := newTestServer(t, true)
 	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
 	form := url.Values{
 		"csrf": {session.CSRFToken}, "name": {""}, "save": {"false"}, "mode": {"direct"},
-		"executable": {"/bin/echo"}, "arguments": {"hello"}, "command": {""}, "working_directory": {"/tmp"},
+		"executable": {"/bin/echo"}, "arguments": {"hello"}, "working_directory": {"/tmp"},
 		"environment": {""}, "timeout_seconds": {"30"}, "stdout_bytes": {"1024"}, "stderr_bytes": {"1024"},
 	}
 	run := postForm(handler, "/jobs/run", form, cookie)
@@ -1311,8 +1362,8 @@ func TestAdHocRunOnlyAndSaveThenRun(t *testing.T) {
 	form.Set("save", "true")
 	form.Set("name", "One-off diagnostic")
 	form.Set("mode", "shell")
-	form.Set("executable", "")
-	form.Set("arguments", "")
+	form.Del("executable")
+	form.Del("arguments")
 	form.Set("command", "printf 'out'; printf 'error' >&2\r\n")
 	saved := postForm(handler, "/jobs/run", form, cookie)
 	if saved.Code != http.StatusSeeOther || !regexp.MustCompile(`^/runs/[0-9a-f]{32}$`).MatchString(saved.Header().Get("Location")) {

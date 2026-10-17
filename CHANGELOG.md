@@ -5,7 +5,14 @@ All notable user-visible changes will be documented here. The project follows
 
 ## Unreleased
 
-No user-visible changes since `v0.3.0`.
+No user-visible changes since `v0.3.1`.
+
+## v0.3.1 - 2026-10-17
+
+- Fixed saved-job creation, saved-job editing, and ad-hoc execution when the
+  browser submits only the fields active for the selected execution mode.
+- Retained strict rejection of unexpected, repeated, and missing active job
+  fields, along with the complete no-JavaScript form path.
 
 ## v0.3.0 - 2026-10-17
 
