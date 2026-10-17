@@ -2,9 +2,9 @@
 
 Last updated: 2026-10-17
 
-[`v0.2.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.2.0) is the
+[`v0.3.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.3.0) is the
 current supported public release. Its immutable ARM64 assets were built from
-commit `45ed87be81e96fdc3a89340baad9ca794d4762e5` by the protected release
+commit `c01ad500f8e2cb6b3fdfd7e9dd258bc802a0505f` by the protected release
 workflow. Hosted validation, checksums, SPDX SBOM, provenance and SBOM
 attestations, independent asset verification, and anonymous exact-version and
 latest-release download checks pass. The declared Trixie and legacy Bookworm
@@ -12,17 +12,6 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
-
-## Development since v0.2.0
-
-- Job and ad-hoc execution forms now expose only the direct-program or shell
-  fields used by the selected execution mode while retaining server-side and
-  no-JavaScript validation.
-- The Overview can store and display one optional bounded host image, with
-  authenticated upload, atomic replacement, explicit removal, no retained
-  image history, and preservation through ordinary package maintenance.
-- Fixed UI wording has been reviewed across the Overview, Registers, Jobs, and
-  Duty Cycle pages.
 
 ## Implemented
 
@@ -33,8 +22,12 @@ tracked in the [roadmap](roadmap.md).
 - Single-owner setup, Argon2id password authentication, bounded sessions,
   CSRF/origin protections, rate limiting, and local reset.
 - Crash-safe bounded controller state and segmented Activity storage.
-- Direct and explicit-shell saved jobs, selected-user execution, sequential
-  runs, process-group termination, bounded output, and recovery observation.
+- Direct and explicit-shell saved jobs, execution-mode-aware saved and ad-hoc
+  forms, selected-user execution, sequential runs, process-group termination,
+  bounded output, and recovery observation.
+- One optional bounded host image on the Overview, with authenticated upload,
+  atomic replacement, explicit removal, no retained image history, and
+  preservation through ordinary package maintenance.
 - Duty-cycle schedule simulation, lifecycle persistence, conservative boot
   classification, verified wake programming, ordered jobs, and fixed orderly
   poweroff requests.
