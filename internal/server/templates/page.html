@@ -42,7 +42,7 @@
         <p class="state-label">Host system</p>
         <h3>Device context</h3>
         <p>Read-only host information for identifying and assessing this Pi.</p>
-		{{ if .HostImage }}<div class="host-image-row"><img class="host-image" src="/host-image" alt="Host {{ hostName }}"><form class="host-image-remove" action="/host-image/remove" method="post"><input type="hidden" name="csrf" value="{{ .CSRFToken }}"><button class="button-danger" type="submit">Remove image</button></form></div>{{ end }}
+		{{ if .HostImage }}<div class="host-image-row"><span class="host-image-frame"><img class="host-image" src="/host-image" alt="Host {{ hostName }}"></span><form class="host-image-remove" action="/host-image/remove" method="post"><input type="hidden" name="csrf" value="{{ .CSRFToken }}"><button class="button-danger" type="submit">Remove image</button></form></div>{{ end }}
 		{{ if .HostImageError }}<div class="notice notice-error" role="alert">{{ .HostImageError }}</div>{{ end }}
         <dl class="status-list">
           <div><dt>Hostname</dt><dd><code>{{ hostName }}</code></dd></div>

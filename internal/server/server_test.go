@@ -361,13 +361,13 @@ func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
 		t.Fatalf("upload response = %d, %q: %s", upload.Code, upload.Header().Get("Location"), upload.Body.String())
 	}
 	overviewPage := request(handler, http.MethodGet, "/", nil, cookie)
-	for _, want := range []string{`class="host-image-row"><img class="host-image" src="/host-image" alt="Host demo-pi"><form class="host-image-remove" action="/host-image/remove"`, `Replace image`, `Remove image`} {
+	for _, want := range []string{`class="host-image-row"><span class="host-image-frame"><img class="host-image" src="/host-image" alt="Host demo-pi"></span><form class="host-image-remove" action="/host-image/remove"`, `Replace image`, `Remove image`} {
 		if !strings.Contains(overviewPage.Body.String(), want) {
 			t.Fatalf("overview missing %q after upload: %s", want, overviewPage.Body.String())
 		}
 	}
 	stylesheet := request(handler, http.MethodGet, "/static/app.css", nil)
-	for _, want := range []string{`.host-image-row { display: flex; flex-wrap: wrap; align-items: center;`, `.host-image { display: block; width: 30mm; height: 30mm;`} {
+	for _, want := range []string{`.host-image-row { display: flex; flex-wrap: wrap; align-items: center;`, `.host-image-frame { display: inline-flex; max-width: 100%; padding: .35rem; border: 1px solid var(--border); background: var(--surface-raised); box-shadow:`, `.host-image { display: block; width: 30mm; height: 30mm;`} {
 		if stylesheet.Code != http.StatusOK || !strings.Contains(stylesheet.Body.String(), want) {
 			t.Fatalf("host-image styling missing %q: %d: %s", want, stylesheet.Code, stylesheet.Body.String())
 		}
