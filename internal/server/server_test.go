@@ -1183,6 +1183,49 @@ func TestJobsPageShowsFixedExecutionIdentity(t *testing.T) {
 	}
 }
 
+func TestJobFormsExposeModeSpecificProgressiveEnhancement(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	for _, path := range []string{"/jobs/new", "/jobs/run"} {
+		page := request(handler, http.MethodGet, path, nil, cookie)
+		body := page.Body.String()
+		for _, want := range []string{
+			`data-job-form`,
+			`data-execution-fields="direct"`,
+			`data-execution-fields="shell"`,
+			`data-execution-required`,
+			`/static/jobs.js?v=1`,
+			`JavaScript is off.`,
+			`Optional; one argument per non-empty line.`,
+		} {
+			if page.Code != http.StatusOK || !strings.Contains(body, want) {
+				t.Fatalf("%s missing %q: %d: %s", path, want, page.Code, body)
+			}
+		}
+	}
+	asset := request(handler, http.MethodGet, "/static/jobs.js", nil)
+	for _, want := range []string{`[data-job-form]`, `[data-execution-fields]`, `control.disabled = !active`, `control.required = active`, `mode.addEventListener("change"`} {
+		if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), want) {
+			t.Fatalf("job enhancement missing %q: %d: %s", want, asset.Code, asset.Body.String())
+		}
+	}
+}
+
+func TestDirectJobWithoutArgumentsRemainsValid(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	form := url.Values{
+		"csrf": {session.CSRFToken}, "revision": {"0"}, "name": {"No arguments"}, "enabled": {"true"},
+		"mode": {"direct"}, "executable": {"/bin/true"}, "arguments": {""}, "command": {""},
+		"working_directory": {"/tmp"}, "environment": {""}, "timeout_seconds": {"30"},
+		"stdout_bytes": {"1024"}, "stderr_bytes": {"1024"},
+	}
+	created := postForm(handler, "/jobs", form, cookie)
+	if created.Code != http.StatusSeeOther {
+		t.Fatalf("zero-argument direct job response = %d: %s", created.Code, created.Body.String())
+	}
+}
+
 func TestAdHocRunOnlyAndSaveThenRun(t *testing.T) {
 	handler, _, session, _ := newTestServer(t, true)
 	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}

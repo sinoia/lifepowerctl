@@ -20,20 +20,21 @@
   <p><a href="/jobs">← Jobs</a></p><div class="page-heading"><p class="eyebrow">Manual execution</p><h1>{{ .Heading }}</h1><p class="lead">{{ .Lead }}</p></div>
   <div class="notice"><strong>No power side effects.</strong> This action cannot add a schedule, program a wake, shut down, or reboot the Pi.</div>
   {{ if .Error }}<div class="notice notice-error" role="alert">{{ .Error }}</div>{{ end }}
-  <form class="card job-form" action="/jobs/run" method="post" data-busy-form data-busy-label="Requesting run…">
+  <form class="card job-form" action="/jobs/run" method="post" data-job-form data-busy-form data-busy-label="Requesting run…">
     <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
     <label for="adhoc-save">Run and save choice</label><select id="adhoc-save" name="save"><option value="false" {{ if eq .Save "false" }}selected{{ end }}>Run once without saving</option><option value="true" {{ if eq .Save "true" }}selected{{ end }}>Save definition, then run</option></select>
     <label for="adhoc-name">Saved-job name</label><input id="adhoc-name" name="name" value="{{ .Name }}" maxlength="128" aria-describedby="adhoc-name-help"><span id="adhoc-name-help" class="helper">Required only when “Save definition, then run” is selected.</span>
     <label for="adhoc-mode">Execution mode</label><select id="adhoc-mode" name="mode"><option value="direct" {{ if eq .Mode "direct" }}selected{{ end }}>Direct program — executable and separate arguments</option><option value="shell" {{ if eq .Mode "shell" }}selected{{ end }}>Shell command — fixed /bin/bash -lc</option></select>
-    <div class="notice"><strong>Choose one mode.</strong> Direct mode never joins arguments into shell text. Shell mode deliberately uses <code>/bin/bash -lc</code>.</div>
-    <label for="adhoc-executable">Direct executable</label><input id="adhoc-executable" name="executable" value="{{ .Executable }}" maxlength="4096">
-    <label for="adhoc-arguments">Direct arguments</label><textarea id="adhoc-arguments" name="arguments" rows="5">{{ .Arguments }}</textarea><span class="helper">One argument per non-empty line.</span>
-    <label for="adhoc-command">Shell command</label><textarea id="adhoc-command" name="command" rows="6" maxlength="16384">{{ .Command }}</textarea>
+    <noscript><div class="notice"><strong>JavaScript is off.</strong> For direct mode, fill executable and optional arguments and leave shell command blank. For shell mode, fill shell command and leave executable and arguments blank.</div></noscript>
+    <div class="execution-fields" data-execution-fields="direct"><label for="adhoc-executable">Direct executable</label><input id="adhoc-executable" name="executable" value="{{ .Executable }}" maxlength="4096" data-execution-required></div>
+    <div class="execution-fields" data-execution-fields="direct"><label for="adhoc-arguments">Direct arguments</label><textarea id="adhoc-arguments" name="arguments" rows="5">{{ .Arguments }}</textarea><span class="helper">Optional; one argument per non-empty line.</span></div>
+    <div class="execution-fields" data-execution-fields="shell"><label for="adhoc-command">Shell command</label><textarea id="adhoc-command" name="command" rows="6" maxlength="16384" data-execution-required>{{ .Command }}</textarea><span class="helper">Explicitly executed as <code>/bin/bash -lc</code>.</span></div>
     <label for="adhoc-directory">Working directory</label><input id="adhoc-directory" name="working_directory" value="{{ .WorkingDirectory }}" maxlength="4096" required>
     <label for="adhoc-environment">Environment</label><textarea id="adhoc-environment" name="environment" rows="5">{{ .Environment }}</textarea><span class="helper">Optional <code>NAME=value</code> entries. Output and Activity may expose program behaviour; do not place secrets here.</span>
     <div class="form-grid"><div><label for="adhoc-timeout">Timeout (seconds)</label><input id="adhoc-timeout" name="timeout_seconds" type="number" min="1" value="{{ .TimeoutSeconds }}" required></div><div><label for="adhoc-stdout">Stdout limit (bytes)</label><input id="adhoc-stdout" name="stdout_bytes" type="number" min="1" value="{{ .StdoutBytes }}" required></div><div><label for="adhoc-stderr">Stderr limit (bytes)</label><input id="adhoc-stderr" name="stderr_bytes" type="number" min="1" value="{{ .StderrBytes }}" required></div></div>
     <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Run now</span></button><a class="button-secondary" href="/jobs">Cancel</a></div>
   </form>
+  <script src="/static/jobs.js?v=1" defer></script>
 {{ template "footer" . }}{{ end }}
 
 {{ define "job-run" }}{{ template "header" . }}
@@ -46,20 +47,21 @@
 {{ define "job-form" }}{{ template "header" . }}
   <p><a href="/jobs">← Jobs</a></p><div class="page-heading"><p class="eyebrow">Definition only</p><h1>{{ .Heading }}</h1><p class="lead">{{ .Lead }}</p></div>
   {{ if .Error }}<div class="notice notice-error" role="alert">{{ .Error }}</div>{{ end }}
-  <form class="card job-form" action="{{ .Action }}" method="post" data-busy-form data-busy-label="Saving job…">
+  <form class="card job-form" action="{{ .Action }}" method="post" data-job-form data-busy-form data-busy-label="Saving job…">
     <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="revision" value="{{ .Revision }}">
     <label for="job-name">Name</label><input id="job-name" name="name" value="{{ .Name }}" maxlength="128" required>
     <label for="job-enabled">Availability</label><select id="job-enabled" name="enabled"><option value="true" {{ if eq .Enabled "true" }}selected{{ end }}>Enabled</option><option value="false" {{ if eq .Enabled "false" }}selected{{ end }}>Disabled</option></select>
     <label for="job-mode">Execution mode</label><select id="job-mode" name="mode"><option value="direct" {{ if eq .Mode "direct" }}selected{{ end }}>Direct program — executable and separate arguments</option><option value="shell" {{ if eq .Mode "shell" }}selected{{ end }}>Shell command — fixed /bin/bash -lc</option></select>
-    <div class="notice"><strong>Choose one mode.</strong> For direct mode, fill executable and arguments and leave shell command blank. For shell mode, fill shell command and leave executable and arguments blank.</div>
-    <label for="job-executable">Direct executable</label><input id="job-executable" name="executable" value="{{ .Executable }}" maxlength="4096" aria-describedby="executable-help"><span id="executable-help" class="helper">Executed directly; arguments are never joined into shell text.</span>
-    <label for="job-arguments">Direct arguments</label><textarea id="job-arguments" name="arguments" rows="5" aria-describedby="arguments-help">{{ .Arguments }}</textarea><span id="arguments-help" class="helper">One argument per non-empty line.</span>
-    <label for="job-command">Shell command</label><textarea id="job-command" name="command" rows="6" maxlength="16384" aria-describedby="command-help">{{ .Command }}</textarea><span id="command-help" class="helper">Explicitly executed as <code>/bin/bash -lc</code>. Pipes, redirection, expansion, and substitutions have their normal shell meaning.</span>
+    <noscript><div class="notice"><strong>JavaScript is off.</strong> For direct mode, fill executable and optional arguments and leave shell command blank. For shell mode, fill shell command and leave executable and arguments blank.</div></noscript>
+    <div class="execution-fields" data-execution-fields="direct"><label for="job-executable">Direct executable</label><input id="job-executable" name="executable" value="{{ .Executable }}" maxlength="4096" aria-describedby="executable-help" data-execution-required><span id="executable-help" class="helper">Executed directly; arguments are never joined into shell text.</span></div>
+    <div class="execution-fields" data-execution-fields="direct"><label for="job-arguments">Direct arguments</label><textarea id="job-arguments" name="arguments" rows="5" aria-describedby="arguments-help">{{ .Arguments }}</textarea><span id="arguments-help" class="helper">Optional; one argument per non-empty line.</span></div>
+    <div class="execution-fields" data-execution-fields="shell"><label for="job-command">Shell command</label><textarea id="job-command" name="command" rows="6" maxlength="16384" aria-describedby="command-help" data-execution-required>{{ .Command }}</textarea><span id="command-help" class="helper">Explicitly executed as <code>/bin/bash -lc</code>. Pipes, redirection, expansion, and substitutions have their normal shell meaning.</span></div>
     <label for="job-directory">Working directory</label><input id="job-directory" name="working_directory" value="{{ .WorkingDirectory }}" maxlength="4096" required>
     <label for="job-environment">Environment</label><textarea id="job-environment" name="environment" rows="5" aria-describedby="environment-help">{{ .Environment }}</textarea><span id="environment-help" class="helper">Optional <code>NAME=value</code> entries, one per non-empty line. Values are stored in the private controller snapshot; do not enter secrets during this initial slice.</span>
     <div class="form-grid"><div><label for="job-timeout">Timeout (seconds)</label><input id="job-timeout" name="timeout_seconds" type="number" min="1" value="{{ .TimeoutSeconds }}" required></div><div><label for="job-stdout">Stdout limit (bytes)</label><input id="job-stdout" name="stdout_bytes" type="number" min="1" value="{{ .StdoutBytes }}" required></div><div><label for="job-stderr">Stderr limit (bytes)</label><input id="job-stderr" name="stderr_bytes" type="number" min="1" value="{{ .StderrBytes }}" required></div></div>
     <div class="button-row"><button type="submit" data-submit-button><span data-button-label>{{ .SubmitLabel }}</span></button><a class="button-secondary" href="/jobs">Cancel</a></div>
   </form>
+  <script src="/static/jobs.js?v=1" defer></script>
 {{ template "footer" . }}{{ end }}
 
 {{ define "job-delete" }}{{ template "header" . }}

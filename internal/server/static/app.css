@@ -157,6 +157,7 @@ button:disabled { border-color: var(--border); background: var(--border); color:
 .button-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 label { display: block; margin-bottom: .35rem; font-weight: 750; }
 .job-form > label { margin-top: 1.25rem; }
+.execution-fields { margin-top: 1.25rem; }
 .schedule-field { margin-top: 1.25rem; }
 .schedule-field > input { width: min(100%, 30rem); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem; margin-top: 1.25rem; }
