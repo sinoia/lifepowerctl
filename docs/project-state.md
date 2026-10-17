@@ -2,9 +2,9 @@
 
 Last updated: 2026-10-17
 
-[`v0.3.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.3.0) is the
+[`v0.3.1`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.3.1) is the
 current supported public release. Its immutable ARM64 assets were built from
-commit `c01ad500f8e2cb6b3fdfd7e9dd258bc802a0505f` by the protected release
+commit `282b837df291121cdc1acbd4ce20b0a59e301644` by the protected release
 workflow. Hosted validation, checksums, SPDX SBOM, provenance and SBOM
 attestations, independent asset verification, and anonymous exact-version and
 latest-release download checks pass. The declared Trixie and legacy Bookworm
@@ -12,13 +12,6 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
-
-## Development since v0.3.0
-
-- Fixed the `v0.3.0` job-form regression that rejected browser submissions
-  after inactive execution-mode fields were disabled. Saved-job creation,
-  editing, and ad-hoc execution now accept the intended mode-specific payload
-  while retaining strict form validation.
 
 ## Implemented
 
