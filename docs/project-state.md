@@ -1,11 +1,13 @@
 # Project state
 
-Last updated: 2026-10-16
+Last updated: 2026-10-17
 
-The local `v0.1.0` release candidate contains the implemented application,
-owner and contributor documentation, production packaging, pull-request CI,
-security analysis, and protected draft-release automation. Hosted validation,
-exact draft-asset acceptance, and publication are the remaining release work.
+The `v0.1.0` release candidate contains the implemented application, owner and
+contributor documentation, production packaging, pull-request CI, security
+analysis, and protected release automation. Hosted validation, attestations,
+independent asset verification, and exact draft-asset acceptance pass on the
+declared ARM64 Trixie and legacy Bookworm scope. Final publication, external
+download-path verification, and release handover are the remaining work.
 
 ## Implemented
 
