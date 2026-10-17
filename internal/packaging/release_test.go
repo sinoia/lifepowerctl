@@ -1552,6 +1552,58 @@ func TestRenderedInstallerSameVersionExitsBeforeDownloadOrMutation(t *testing.T)
 	}
 }
 
+func TestInstallerAuthenticationGuidanceMatchesInstallationAction(t *testing.T) {
+	prefix := renderedInstallerPrefix(t)
+	tests := []struct {
+		action    string
+		want      []string
+		doNotWant []string
+	}{
+		{
+			action: "fresh",
+			want: []string{
+				"Local setup URL: http://127.0.0.1:8080/ (use the one-time setup link printed above).",
+				"The setup link was printed only to your terminal and was not retained by the installer.",
+			},
+			doNotWant: []string{"Local administration URL:", "existing authentication data was preserved"},
+		},
+		{
+			action:    "upgrade",
+			want:      []string{"Local administration URL: http://127.0.0.1:8080/ (existing authentication data was preserved)."},
+			doNotWant: []string{"Local setup URL:", "one-time setup link", "setup link was printed"},
+		},
+		{
+			action:    "restore",
+			want:      []string{"Local administration URL: http://127.0.0.1:8080/ (existing authentication data was preserved)."},
+			doNotWant: []string{"Local setup URL:", "one-time setup link", "setup link was printed"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.action, func(t *testing.T) {
+			script := prefix + "\ninstallation_action=" + test.action + "\nprint_authentication_guidance\n"
+			path := filepath.Join(t.TempDir(), "guidance.sh")
+			if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("/bin/sh", path).CombinedOutput()
+			if err != nil {
+				t.Fatalf("guidance: %v\n%s", err, output)
+			}
+			value := string(output)
+			for _, want := range test.want {
+				if !strings.Contains(value, want) {
+					t.Fatalf("%s guidance missing %q:\n%s", test.action, want, value)
+				}
+			}
+			for _, unwanted := range test.doNotWant {
+				if strings.Contains(value, unwanted) {
+					t.Fatalf("%s guidance contains %q:\n%s", test.action, unwanted, value)
+				}
+			}
+		})
+	}
+}
+
 func TestRenderedInstallerRefusesUnsafeLifecycleStatusBeforeMutation(t *testing.T) {
 	prefix := renderedInstallerPrefix(t)
 	tests := []struct {
