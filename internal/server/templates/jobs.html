@@ -1,6 +1,6 @@
 {{ define "job-list" }}{{ template "header" . }}
-  <div class="page-heading"><p class="eyebrow">Manual work</p><h1>Jobs</h1><p class="lead">Saved commands that can later be run manually or deliberately added to the single duty-cycle run list.</p></div>
-  <div class="notice"><strong>Manual execution only.</strong> A job runs only when you press Run and confirm this authenticated request. Manual runs cannot schedule themselves, program a wake, or request shutdown or reboot.</div>
+  <div class="page-heading"><p class="eyebrow">Manual work</p><h1>Jobs</h1><p class="lead">Saved commands that can later be run manually or added to the single duty-cycle run list.</p></div>
+  <div class="notice"><strong>Manual execution only.</strong> A job runs only when you press Run and confirm this authenticated request. Manual runs cannot program a wake or request shutdown or reboot.</div>
   <article class="card"><h2>Execution identity</h2><p>When execution is enabled, every job will run as this fixed ordinary account. It cannot be changed in the web UI.</p><dl class="status-list"><div><dt>User</dt><dd><code>{{ .JobUser }}</code> (UID {{ .JobUID }})</dd></div><div><dt>Home</dt><dd><code>{{ .JobHome }}</code></dd></div><div><dt>Direct-job PATH</dt><dd><code>{{ .JobPath }}</code></dd></div><div><dt>Shell mode</dt><dd><code>/bin/bash -lc</code></dd></div></dl></article>
   <div class="button-row"><a class="button-primary" href="/jobs/run">Run ad-hoc command</a><a class="button-secondary" href="/jobs/new">Create saved job</a><a class="button-secondary" href="/runs">Run history</a></div>
   {{ if .Jobs }}<div class="section-grid">{{ range .Jobs }}<article class="card state-card" data-state="{{ if .Enabled }}ok{{ else }}warning{{ end }}">
