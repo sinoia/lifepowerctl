@@ -13,6 +13,17 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
 
+## Development since v0.2.0
+
+- Job and ad-hoc execution forms now expose only the direct-program or shell
+  fields used by the selected execution mode while retaining server-side and
+  no-JavaScript validation.
+- The Overview can store and display one optional bounded host image, with
+  authenticated upload, atomic replacement, explicit removal, no retained
+  image history, and preservation through ordinary package maintenance.
+- Fixed UI wording has been reviewed across the Overview, Registers, Jobs, and
+  Duty Cycle pages.
+
 ## Implemented
 
 - Read-only board identity, telemetry, diagnostics, and a reviewed register

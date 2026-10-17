@@ -45,7 +45,7 @@ values are examples; they are not captured from an owner's Pi.
 ## What it provides
 
 - A dashboard with board identity, power state, battery information, and
-  diagnostics.
+  diagnostics, plus an optional identifying host image.
 - A reviewed register catalogue and purpose-specific editors for safe,
   temporary changes.
 - Password authentication, CSRF protection, bounded sessions, and local

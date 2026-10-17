@@ -11,6 +11,14 @@ battery information, and diagnostics. Treat unavailable or unsupported
 identity as a stop condition for changes. Save diagnostic output only after
 reviewing it for hostnames, paths, job output, or other private information.
 
+The Host system panel can display one optional identifying image. Upload a
+JPEG or PNG of at most 8 MiB and 16 megapixels; the page displays it as a small
+square regardless of its original proportions. Replacing or removing the
+image does not retain a previous copy. The file remains private application
+state, is preserved by ordinary uninstall, and is included when the state
+directory is backed up. Image metadata is retained in the stored original and
+the image is not included in diagnostics or Activity.
+
 ## Register settings
 
 The Registers page separates read-only values from a small reviewed set of
@@ -29,8 +37,10 @@ power loss or board reset can return them to their flash-backed values. See
 
 A saved job can use direct execution (an executable plus argument list) or an
 explicit shell command. Prefer direct execution when shell parsing is not
-needed. Jobs run sequentially as the ordinary account selected during
-installation, with that account's existing home and permissions.
+needed. The job form shows only the fields used by the selected execution
+mode; a direct executable may have no arguments. Jobs run sequentially as the
+ordinary account selected during installation, with that account's existing
+home and permissions.
 
 Before saving a job:
 

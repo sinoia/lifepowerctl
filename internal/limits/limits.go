@@ -21,6 +21,7 @@ type Limits struct {
 	Polling              Polling
 	Persistence          Persistence
 	Authentication       Authentication
+	HostImage            HostImage
 	ControllerSoftMemory int64
 	ControllerMemory     int64
 	RunnerMemory         int64
@@ -90,6 +91,11 @@ type Authentication struct {
 	SetupLifetime    time.Duration
 }
 
+type HostImage struct {
+	MaxBytes  int64
+	MaxPixels int64
+}
+
 func Default() Limits {
 	return Limits{
 		HTTP: HTTP{
@@ -146,6 +152,7 @@ func Default() Limits {
 			AbsoluteLifetime: 7 * 24 * time.Hour,
 			SetupLifetime:    30 * time.Minute,
 		},
+		HostImage:            HostImage{MaxBytes: 8 << 20, MaxPixels: 16_000_000},
 		ControllerSoftMemory: 64 << 20,
 		ControllerMemory:     128 << 20,
 		RunnerMemory:         256 << 20,
@@ -187,6 +194,9 @@ func (limits Limits) Validate() error {
 	}
 	if limits.Authentication.MaxSessions < 1 || limits.Authentication.IdleLifetime <= 0 || limits.Authentication.AbsoluteLifetime < limits.Authentication.IdleLifetime || limits.Authentication.SetupLifetime <= 0 {
 		return fmt.Errorf("invalid authentication limits")
+	}
+	if limits.HostImage.MaxBytes <= 0 || limits.HostImage.MaxPixels <= 0 {
+		return fmt.Errorf("invalid host image limits")
 	}
 	if limits.ControllerSoftMemory <= 0 || limits.ControllerSoftMemory > limits.ControllerMemory || limits.ControllerMemory < 64<<20 || limits.RunnerMemory < limits.ControllerMemory || limits.RunnerTasks < 8 {
 		return fmt.Errorf("invalid service resource limits")

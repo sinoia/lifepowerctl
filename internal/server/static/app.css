@@ -138,6 +138,9 @@ h2 { margin-top: 2.5rem; line-height: 1.2; }
 .status-list div { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: .55rem 0; border-top: 1px solid var(--border); }
 .status-list dt { color: var(--muted); }
 .status-list dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
+.host-image { display: block; width: 15mm; height: 15mm; max-width: 100%; margin: 1rem 0; border: 1px solid var(--border); object-fit: cover; }
+.host-image-upload { margin-top: 1rem; }
+.host-image-upload input[type="file"] { width: 100%; }
 
 input, button, select, textarea { min-height: var(--control-height); border: 2px solid var(--border); border-radius: 0; font: inherit; }
 input, select, textarea { min-width: 0; padding: .55rem .7rem; background: var(--input-background); color: var(--input-text); }
@@ -157,6 +160,7 @@ button:disabled { border-color: var(--border); background: var(--border); color:
 .button-row { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 label { display: block; margin-bottom: .35rem; font-weight: 750; }
 .job-form > label { margin-top: 1.25rem; }
+.execution-fields { margin-top: 1.25rem; }
 .schedule-field { margin-top: 1.25rem; }
 .schedule-field > input { width: min(100%, 30rem); }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: 1rem; margin-top: 1.25rem; }

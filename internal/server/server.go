@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -18,6 +19,7 @@ import (
 	"github.com/sinoia/lifepowerctl/internal/controllerapi"
 	"github.com/sinoia/lifepowerctl/internal/controllerstate"
 	"github.com/sinoia/lifepowerctl/internal/diagnostic"
+	"github.com/sinoia/lifepowerctl/internal/hostimage"
 	"github.com/sinoia/lifepowerctl/internal/jobs"
 	"github.com/sinoia/lifepowerctl/internal/limits"
 	"github.com/sinoia/lifepowerctl/internal/overview"
@@ -57,6 +59,7 @@ type Options struct {
 	JobIdentity         jobs.ExecutionIdentity
 	JobRunner           JobRunner
 	JobOutput           *jobs.OutputStore
+	HostImage           *hostimage.Store
 }
 
 type JobRunner interface {
@@ -180,6 +183,7 @@ type application struct {
 	jobIdentity         jobs.ExecutionIdentity
 	jobRunner           JobRunner
 	jobOutput           *jobs.OutputStore
+	hostImage           *hostimage.Store
 	secureCookies       bool
 	loginBackoff        *backoff
 	setupBackoff        *backoff
@@ -199,6 +203,8 @@ type pageData struct {
 	LastSuccess     string
 	FailureGuidance string
 	Uptime          string
+	HostImage       bool
+	HostImageError  string
 }
 
 type errorPageData struct {
@@ -249,6 +255,9 @@ func New(options Options) (http.Handler, error) {
 	if options.JobRunner == nil || options.JobOutput == nil {
 		return nil, fmt.Errorf("job runner client and output reader are required")
 	}
+	if options.HostImage == nil {
+		return nil, fmt.Errorf("host image store is required")
+	}
 	var trustedProxy netip.Addr
 	if options.TrustedProxy != "" {
 		trustedProxy, err = netip.ParseAddr(options.TrustedProxy)
@@ -277,7 +286,7 @@ func New(options Options) (http.Handler, error) {
 	app := &application{
 		build: options.Build, hostStatus: hostStatus, authentication: options.Authentication, overviewService: options.Overview, registerService: options.Registers, registerEditor: options.RegisterEditor, batchRegisterEditor: options.BatchRegisterEditor, shutdownDelayEditor: options.ShutdownDelayEditor, audit: options.Audit, activityJournal: options.Activity, templates: templates,
 		origin: origin, trustedProxy: trustedProxy, maxBodyBytes: options.MaxBodyBytes, diagnosticMaxBytes: options.DiagnosticMaxBytes,
-		dutyCycle: options.DutyCycle, jobLimits: options.JobLimits, jobIdentity: options.JobIdentity, jobRunner: options.JobRunner, jobOutput: options.JobOutput,
+		dutyCycle: options.DutyCycle, jobLimits: options.JobLimits, jobIdentity: options.JobIdentity, jobRunner: options.JobRunner, jobOutput: options.JobOutput, hostImage: options.HostImage,
 		secureCookies: origin.Scheme == "https", loginBackoff: newBackoff(time.Now), setupBackoff: newBackoff(time.Now),
 	}
 	if options.JobDefinitions != nil {
@@ -300,6 +309,9 @@ func New(options Options) (http.Handler, error) {
 	mux.HandleFunc("POST /login", app.login)
 	mux.HandleFunc("POST /logout", app.logout)
 	mux.Handle("GET /readyz", app.requireSession(http.HandlerFunc(app.readiness)))
+	mux.Handle("GET /host-image", app.requireSession(http.HandlerFunc(app.hostImageFile)))
+	mux.Handle("POST /host-image", app.requireSession(http.HandlerFunc(app.hostImageUpload)))
+	mux.Handle("POST /host-image/remove", app.requireSession(http.HandlerFunc(app.hostImageRemove)))
 	mux.Handle("GET /registers", app.requireSession(http.HandlerFunc(app.registerList)))
 	mux.Handle("GET /registers/{register}", app.requireSession(http.HandlerFunc(app.registerDetail)))
 	mux.Handle("POST /registers/{register}/review", app.requireSession(http.HandlerFunc(app.registerReview)))
@@ -382,6 +394,13 @@ func (app *application) overview(response http.ResponseWriter, request *http.Req
 		data.Uptime = formatUptime(uptime)
 	} else {
 		data.Uptime = "Unavailable"
+	}
+	file, _, err := app.hostImage.Open()
+	if err == nil {
+		data.HostImage = true
+		_ = file.Close()
+	} else if !errors.Is(err, hostimage.ErrNotFound) {
+		data.HostImageError = "The stored host image is unavailable. Upload a replacement to restore it."
 	}
 	app.render(response, "page", data)
 }

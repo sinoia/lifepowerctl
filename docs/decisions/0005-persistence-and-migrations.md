@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-10
+- Amended: 2026-10-17 for the replaceable host presentation image
 
 ## Context
 
@@ -20,7 +21,7 @@ requirements exceed the bounded file design.
 
 ## Decision
 
-Use standard-library JSON with three storage classes:
+Use standard-library files with four storage classes:
 
 1. One versioned aggregate controller snapshot for configuration, saved jobs,
    duty-cycle state, and retention policy. Its encoded payload is capped at
@@ -32,6 +33,12 @@ Use standard-library JSON with three storage classes:
    startup recovery; earlier complete records remain immutable.
 3. Separate bounded files for job stdout/stderr. Output contents never enter
    the controller snapshot.
+4. One bounded private host presentation image outside the controller
+   snapshot. The web service validates its decoded JPEG or PNG type and pixel
+   count, streams it to a mode-0600 temporary file, then atomically replaces
+   the current file and syncs the directory. Replacement and removal retain
+   no history. The fixed file is preserved with the application state but is
+   never included in diagnostics or Activity.
 
 Snapshot replacement writes a mode-0600 temporary file in a mode-0700 state
 directory, syncs it, rotates the current file to a previous snapshot, renames
@@ -81,7 +88,8 @@ than SQL queries.
 
 The implementation covers snapshot replacement, permissions, revision checks,
 future-schema rejection, recovery from the previous snapshot, bounded activity
-rotation, retention, and truncated-tail repair. Activity events are operational
-history rather than telemetry and are synced individually. If SD-card evidence
-requires batching later, the permitted loss window must be explicit and safety
-transitions must remain synchronous.
+rotation, retention, truncated-tail repair, and no-history replacement of the
+optional host image. Activity events are operational history rather than
+telemetry and are synced individually. If SD-card evidence requires batching
+later, the permitted loss window must be explicit and safety transitions must
+remain synchronous.

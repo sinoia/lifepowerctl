@@ -2,6 +2,7 @@
 
 - Status: accepted
 - Date: 2026-10-10
+- Amended: 2026-10-17 for bounded host-image upload
 
 ## Context
 
@@ -31,15 +32,18 @@ larger systemd memory limit remains the hard containment boundary.
 | Response write / idle connection | 30 s / 60 s |
 | Graceful server shutdown | 5 s |
 | Headers / request body | 16 KiB / 64 KiB |
+| Host-image upload / decoded pixels | 8 MiB / 16 megapixels |
 | Open connections / concurrent handlers | 32 / 16 |
 | Active sessions | 16 |
 | Session idle / absolute lifetime | 12 hours / 7 days |
 | First-run setup token | 30 minutes |
 
-The body limit covers forms and job definitions; the initial application has no
-file-upload endpoint. Handlers apply the body cap before form, JSON, or multipart
-parsing. Expensive handlers use their own concurrency gate in addition to the
-connection limit.
+The ordinary body limit covers forms and job definitions. The authenticated
+host-image endpoint has its own larger streaming cap plus bounded multipart
+overhead and accepts only decoded JPEG or PNG input within the pixel limit.
+Handlers apply the applicable body cap before form, JSON, or multipart parsing.
+Expensive handlers use their own concurrency gate in addition to the connection
+limit.
 
 ### Internal commands and polling
 
