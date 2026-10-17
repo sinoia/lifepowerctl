@@ -26,6 +26,7 @@ import (
 	"github.com/sinoia/lifepowerctl/internal/controllerapi"
 	"github.com/sinoia/lifepowerctl/internal/controllerstate"
 	"github.com/sinoia/lifepowerctl/internal/dutycycle"
+	"github.com/sinoia/lifepowerctl/internal/hostimage"
 	"github.com/sinoia/lifepowerctl/internal/jobs"
 	"github.com/sinoia/lifepowerctl/internal/limits"
 	"github.com/sinoia/lifepowerctl/internal/overview"
@@ -656,11 +657,15 @@ func serve(args []string) error {
 	if err != nil {
 		return fmt.Errorf("create job-output reader: %w", err)
 	}
+	hostImageStore, err := hostimage.New(serviceConfig.StateDirectory, runtimeLimits.HostImage)
+	if err != nil {
+		return fmt.Errorf("create host image store: %w", err)
+	}
 	handler, err := server.New(server.Options{
 		Build: server.BuildInfo{Version: version, Commit: commit}, Authentication: authentication, Overview: overviewService, Registers: registerService, RegisterEditor: registerEditor, BatchRegisterEditor: batchRegisterEditor, ShutdownDelayEditor: shutdownDelayEditor, Audit: audit, Activity: journal,
 		ExternalOrigin: serviceConfig.ExternalOrigin, TrustedProxy: serviceConfig.TrustedProxy,
 		MaxBodyBytes: runtimeLimits.HTTP.MaxBodyBytes, DiagnosticMaxBytes: runtimeLimits.Persistence.MaxSnapshotBytes,
-		JobDefinitions: controllerClient, RunState: controllerClient, DutyCycle: controllerClient, JobLimits: runtimeLimits.Jobs, JobIdentity: serviceConfig.JobIdentity, JobRunner: runnerClient, JobOutput: outputReader,
+		JobDefinitions: controllerClient, RunState: controllerClient, DutyCycle: controllerClient, JobLimits: runtimeLimits.Jobs, JobIdentity: serviceConfig.JobIdentity, JobRunner: runnerClient, JobOutput: outputReader, HostImage: hostImageStore,
 	})
 	if err != nil {
 		return fmt.Errorf("create server: %w", err)

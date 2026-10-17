@@ -42,10 +42,19 @@
         <p class="state-label">Host system</p>
         <h3>Device context</h3>
         <p>Read-only host information for identifying and assessing this Pi.</p>
+		{{ if .HostImage }}<img class="host-image" src="/host-image" alt="Host {{ hostName }}">{{ end }}
+		{{ if .HostImageError }}<div class="notice notice-error" role="alert">{{ .HostImageError }}</div>{{ end }}
         <dl class="status-list">
           <div><dt>Hostname</dt><dd><code>{{ hostName }}</code></dd></div>
           <div><dt>Uptime</dt><dd>{{ .Uptime }}</dd></div>
         </dl>
+		<form class="host-image-upload" action="/host-image" method="post" enctype="multipart/form-data" data-busy-form data-busy-label="Uploading image…">
+		  <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
+		  <label for="host-image-upload">{{ if .HostImage }}Replace host image{{ else }}Upload host image{{ end }}</label>
+		  <input id="host-image-upload" name="image" type="file" accept="image/jpeg,image/png" required>
+		  <div class="button-row"><button type="submit" data-submit-button><span data-button-label>{{ if .HostImage }}Replace image{{ else }}Upload image{{ end }}</span></button></div>
+		</form>
+		{{ if .HostImage }}<form action="/host-image/remove" method="post"><input type="hidden" name="csrf" value="{{ .CSRFToken }}"><div class="button-row"><button class="button-danger" type="submit">Remove image</button></div></form>{{ end }}
       </article>
 
       <article class="card state-card" data-state="ok">

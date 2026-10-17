@@ -2,13 +2,18 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/sinoia/lifepowerctl/internal/hostimage"
 	"github.com/sinoia/lifepowerctl/internal/overview"
 )
+
+const multipartOverheadBytes = 64 << 10
 
 func overviewPageData(snapshot overview.Snapshot) pageData {
 	data := pageData{
@@ -40,6 +45,90 @@ func overviewPageData(snapshot overview.Snapshot) pageData {
 		data.FailureGuidance = failureGuidance(snapshot.Failure)
 	}
 	return data
+}
+
+func (app *application) hostImageFile(response http.ResponseWriter, request *http.Request) {
+	file, info, err := app.hostImage.Open()
+	if errors.Is(err, hostimage.ErrNotFound) {
+		app.errorPage(response, http.StatusNotFound, "Host image not found", "No host image has been uploaded.")
+		return
+	}
+	if err != nil {
+		app.errorPage(response, http.StatusServiceUnavailable, "Host image unavailable", "The stored host image could not be read safely.")
+		return
+	}
+	defer file.Close()
+	response.Header().Set("Content-Type", info.ContentType)
+	response.Header().Set("Content-Length", fmt.Sprintf("%d", info.Size))
+	response.Header().Set("Content-Disposition", "inline")
+	http.ServeContent(response, request, "", time.Unix(0, info.Modified), file)
+}
+
+func (app *application) hostImageUpload(response http.ResponseWriter, request *http.Request) {
+	if !app.validMutation(request) {
+		app.errorPage(response, http.StatusForbidden, "Request rejected", "The image upload could not be verified.")
+		return
+	}
+	mediaType, parameters, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+	if err != nil || mediaType != "multipart/form-data" || parameters["boundary"] == "" {
+		app.errorPage(response, http.StatusUnsupportedMediaType, "Unsupported upload", "Use the image upload form on the Overview page.")
+		return
+	}
+	request.Body = http.MaxBytesReader(response, request.Body, app.hostImage.Limits().MaxBytes+multipartOverheadBytes)
+	if err := request.ParseMultipartForm(app.maxBodyBytes); err != nil {
+		var maximum *http.MaxBytesError
+		if errors.As(err, &maximum) {
+			app.errorPage(response, http.StatusRequestEntityTooLarge, "Image too large", "Choose an image no larger than 8 MiB.")
+			return
+		}
+		app.errorPage(response, http.StatusBadRequest, "Invalid upload", "The submitted image form was invalid or incomplete.")
+		return
+	}
+	defer request.MultipartForm.RemoveAll()
+	values := request.MultipartForm.Value
+	files := request.MultipartForm.File
+	if len(values) != 1 || len(values["csrf"]) != 1 || len(files) != 1 || len(files["image"]) != 1 {
+		app.errorPage(response, http.StatusBadRequest, "Invalid upload", "The submitted image form contained missing, repeated, or unexpected fields.")
+		return
+	}
+	if err := app.authentication.CheckCSRF(sessionFromContext(request.Context()).Token, values["csrf"][0]); err != nil {
+		app.errorPage(response, http.StatusForbidden, "Request rejected", "The image upload could not be verified.")
+		return
+	}
+	upload, err := files["image"][0].Open()
+	if err != nil {
+		app.errorPage(response, http.StatusBadRequest, "Invalid upload", "The uploaded image could not be opened.")
+		return
+	}
+	defer upload.Close()
+	if _, err := app.hostImage.Replace(upload); errors.Is(err, hostimage.ErrInvalid) {
+		app.errorPage(response, http.StatusUnprocessableEntity, "Unsupported image", "Choose a complete JPEG or PNG image no larger than 8 MiB and 16 megapixels.")
+		return
+	} else if err != nil {
+		app.errorPage(response, http.StatusServiceUnavailable, "Image not saved", "The host image could not be stored safely.")
+		return
+	}
+	http.Redirect(response, request, "/", http.StatusSeeOther)
+}
+
+func (app *application) hostImageRemove(response http.ResponseWriter, request *http.Request) {
+	if !app.validMutation(request) {
+		app.errorPage(response, http.StatusForbidden, "Request rejected", "The image removal could not be verified.")
+		return
+	}
+	form, ok := app.parseForm(response, request, "csrf")
+	if !ok {
+		return
+	}
+	if err := app.authentication.CheckCSRF(sessionFromContext(request.Context()).Token, form.Get("csrf")); err != nil {
+		app.errorPage(response, http.StatusForbidden, "Request rejected", "The image removal could not be verified.")
+		return
+	}
+	if err := app.hostImage.Remove(); err != nil {
+		app.errorPage(response, http.StatusServiceUnavailable, "Image not removed", "The host image could not be removed safely.")
+		return
+	}
+	http.Redirect(response, request, "/", http.StatusSeeOther)
 }
 
 func formatUptime(value time.Duration) string {

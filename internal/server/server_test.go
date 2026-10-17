@@ -1,10 +1,15 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/color"
+	"image/png"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +24,7 @@ import (
 	"github.com/sinoia/lifepowerctl/internal/board"
 	"github.com/sinoia/lifepowerctl/internal/controllerapi"
 	"github.com/sinoia/lifepowerctl/internal/controllerstate"
+	"github.com/sinoia/lifepowerctl/internal/hostimage"
 	"github.com/sinoia/lifepowerctl/internal/jobs"
 	"github.com/sinoia/lifepowerctl/internal/limits"
 	"github.com/sinoia/lifepowerctl/internal/overview"
@@ -199,11 +205,15 @@ func newTestServerWithDuty(t *testing.T, configured bool, duty DutyCycleControll
 	if err != nil {
 		t.Fatal(err)
 	}
+	hostImageStore, err := hostimage.New(t.TempDir(), limits.Default().HostImage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := New(Options{
 		Build: BuildInfo{Version: "v0.1.0-preview", Commit: "0000000"}, HostStatus: serverTestHostStatus{}, Authentication: manager,
 		Overview: overviewService, Registers: registerService, RegisterEditor: registerEditor, BatchRegisterEditor: batchRegisterEditor, Activity: journal, Audit: audit,
 		ExternalOrigin: testOrigin, MaxBodyBytes: limits.Default().HTTP.MaxBodyBytes, DiagnosticMaxBytes: limits.Default().Persistence.MaxSnapshotBytes,
-		Jobs: jobManager, DutyCycle: duty, JobLimits: limits.Default().Jobs, JobIdentity: jobs.ExecutionIdentity{User: "pi", UID: 1000, Home: "/home/pi", Path: jobs.DefaultPath}, JobRunner: &serverTestJobRunner{output: jobOutput}, JobOutput: jobOutput,
+		Jobs: jobManager, DutyCycle: duty, JobLimits: limits.Default().Jobs, JobIdentity: jobs.ExecutionIdentity{User: "pi", UID: 1000, Home: "/home/pi", Path: jobs.DefaultPath}, JobRunner: &serverTestJobRunner{output: jobOutput}, JobOutput: jobOutput, HostImage: hostImageStore,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -329,6 +339,61 @@ func TestHostIdentityAppearsThroughoutSiteAndOverviewShowsUptime(t *testing.T) {
 		if !strings.Contains(overviewPage.Body.String(), want) {
 			t.Fatalf("overview missing %q: %s", want, overviewPage.Body.String())
 		}
+	}
+}
+
+func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	initial := request(handler, http.MethodGet, "/", nil, cookie)
+	for _, want := range []string{`action="/host-image"`, `enctype="multipart/form-data"`, `accept="image/jpeg,image/png"`, `Upload image`} {
+		if initial.Code != http.StatusOK || !strings.Contains(initial.Body.String(), want) {
+			t.Fatalf("initial overview missing %q: %d: %s", want, initial.Code, initial.Body.String())
+		}
+	}
+	if strings.Contains(initial.Body.String(), `class="host-image"`) || strings.Contains(initial.Body.String(), `action="/host-image/remove"`) {
+		t.Fatalf("initial overview presents a stored image: %s", initial.Body.String())
+	}
+
+	encoded := serverTestPNG(t, 3, 2)
+	upload := postMultipartImage(handler, session.CSRFToken, encoded, cookie)
+	if upload.Code != http.StatusSeeOther || upload.Header().Get("Location") != "/" {
+		t.Fatalf("upload response = %d, %q: %s", upload.Code, upload.Header().Get("Location"), upload.Body.String())
+	}
+	overviewPage := request(handler, http.MethodGet, "/", nil, cookie)
+	for _, want := range []string{`class="host-image" src="/host-image" alt="Host demo-pi"`, `Replace image`, `action="/host-image/remove"`, `Remove image`} {
+		if !strings.Contains(overviewPage.Body.String(), want) {
+			t.Fatalf("overview missing %q after upload: %s", want, overviewPage.Body.String())
+		}
+	}
+	imageResponse := request(handler, http.MethodGet, "/host-image", nil, cookie)
+	if imageResponse.Code != http.StatusOK || imageResponse.Header().Get("Content-Type") != "image/png" || !bytes.Equal(imageResponse.Body.Bytes(), encoded) {
+		t.Fatalf("image response = %d, %q, %d bytes", imageResponse.Code, imageResponse.Header().Get("Content-Type"), imageResponse.Body.Len())
+	}
+	removed := postForm(handler, "/host-image/remove", url.Values{"csrf": {session.CSRFToken}}, cookie)
+	if removed.Code != http.StatusSeeOther || removed.Header().Get("Location") != "/" {
+		t.Fatalf("remove response = %d, %q: %s", removed.Code, removed.Header().Get("Location"), removed.Body.String())
+	}
+	missing := request(handler, http.MethodGet, "/host-image", nil, cookie)
+	if missing.Code != http.StatusNotFound {
+		t.Fatalf("removed image response = %d: %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestHostImageUploadRequiresValidImageAndCSRF(t *testing.T) {
+	handler, _, session, _ := newTestServer(t, true)
+	cookie := &http.Cookie{Name: sessionCookie, Value: session.Token}
+	invalid := postMultipartImage(handler, session.CSRFToken, []byte("not an image"), cookie)
+	if invalid.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("invalid image response = %d: %s", invalid.Code, invalid.Body.String())
+	}
+	badCSRF := postMultipartImage(handler, "wrong", serverTestPNG(t, 1, 1), cookie)
+	if badCSRF.Code != http.StatusForbidden {
+		t.Fatalf("bad-CSRF image response = %d: %s", badCSRF.Code, badCSRF.Body.String())
+	}
+	unauthenticated := postMultipartImage(handler, session.CSRFToken, serverTestPNG(t, 1, 1))
+	if unauthenticated.Code != http.StatusSeeOther || unauthenticated.Header().Get("Location") != "/login" {
+		t.Fatalf("unauthenticated image response = %d, %q", unauthenticated.Code, unauthenticated.Header().Get("Location"))
 	}
 }
 
@@ -481,7 +546,7 @@ func TestDutyCycleEditorMarksRelevantScheduleFieldsAndExplainsCompletion(t *test
 	if !strings.Contains(styles.Body.String(), `[hidden] { display: none !important; }`) {
 		t.Fatalf("stylesheet does not preserve the hidden attribute: %s", styles.Body.String())
 	}
-	if !strings.Contains(body, `/static/app.css?v=3`) {
+	if !strings.Contains(body, `/static/app.css?v=4`) {
 		t.Fatalf("editor does not use the corrected stylesheet version: %s", body)
 	}
 }
@@ -1381,6 +1446,35 @@ func postForm(handler http.Handler, path string, form url.Values, cookies ...*ht
 	return response
 }
 
+func postMultipartImage(handler http.Handler, csrf string, value []byte, cookies ...*http.Cookie) *httptest.ResponseRecorder {
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	_ = writer.WriteField("csrf", csrf)
+	part, _ := writer.CreateFormFile("image", "host.png")
+	_, _ = part.Write(value)
+	_ = writer.Close()
+	req := httptest.NewRequest(http.MethodPost, testOrigin+"/host-image", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	req.Header.Set("Origin", testOrigin)
+	for _, cookie := range cookies {
+		req.AddCookie(cookie)
+	}
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, req)
+	return response
+}
+
+func serverTestPNG(t *testing.T, width, height int) []byte {
+	t.Helper()
+	value := image.NewNRGBA(image.Rect(0, 0, width, height))
+	value.Set(0, 0, color.NRGBA{G: 0xff, A: 0xff})
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, value); err != nil {
+		t.Fatal(err)
+	}
+	return encoded.Bytes()
+}
+
 func TestRejectsHostOriginDuplicateAndOversizedForms(t *testing.T) {
 	handler, _, _, _ := newTestServer(t, true)
 
@@ -1442,10 +1536,14 @@ func TestHTTPSCookiesAreSecure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	hostImageStore, err := hostimage.New(t.TempDir(), limits.Default().HostImage)
+	if err != nil {
+		t.Fatal(err)
+	}
 	handler, err := New(Options{
 		Authentication: manager, Overview: overviewService, Registers: registerService, RegisterEditor: registerEditor, BatchRegisterEditor: batchRegisterEditor, Activity: journal,
 		ExternalOrigin: "https://power.test", MaxBodyBytes: 1024, DiagnosticMaxBytes: limits.Default().Persistence.MaxSnapshotBytes,
-		Jobs: jobManager, JobLimits: limits.Default().Jobs, JobIdentity: jobs.ExecutionIdentity{User: "pi", UID: 1000, Home: "/home/pi", Path: jobs.DefaultPath}, JobRunner: &serverTestJobRunner{}, JobOutput: jobOutput,
+		Jobs: jobManager, JobLimits: limits.Default().Jobs, JobIdentity: jobs.ExecutionIdentity{User: "pi", UID: 1000, Home: "/home/pi", Path: jobs.DefaultPath}, JobRunner: &serverTestJobRunner{}, JobOutput: jobOutput, HostImage: hostImageStore,
 	})
 	if err != nil {
 		t.Fatal(err)

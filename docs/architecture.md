@@ -47,11 +47,11 @@ the next wake and fixed poweroff request follow only complete success.
 
 ## Resource model
 
-All inputs, HTTP bodies, vendor output, state, Activity segments, job queues,
-processes, runtime, and retained stdout/stderr have explicit bounds. Services
-have systemd memory, task, descriptor, filesystem, device, and address-family
-limits appropriate to their responsibilities. The design favors standard Go,
-small static assets, and no client build toolchain.
+All inputs, HTTP bodies, uploaded host images, vendor output, state, Activity
+segments, job queues, processes, runtime, and retained stdout/stderr have
+explicit bounds. Services have systemd memory, task, descriptor, filesystem,
+device, and address-family limits appropriate to their responsibilities. The
+design favors standard Go, small static assets, and no client build toolchain.
 
 The accepted detailed contracts live in `docs/decisions/` and the behavioral
 models in `docs/reference/`.

@@ -15,6 +15,8 @@ func TestRejectsUnsafeLimitRelationships(t *testing.T) {
 	}{
 		{name: "concurrency", change: func(value *Limits) { value.HTTP.MaxConcurrent = value.HTTP.MaxConnections + 1 }},
 		{name: "body size", change: func(value *Limits) { value.HTTP.MaxBodyBytes = 0 }},
+		{name: "host image size", change: func(value *Limits) { value.HostImage.MaxBytes = 0 }},
+		{name: "host image pixels", change: func(value *Limits) { value.HostImage.MaxPixels = 0 }},
 		{name: "vendor command", change: func(value *Limits) { value.Vendor.MaxStdoutBytes = 0 }},
 		{name: "power command", change: func(value *Limits) { value.Power.Timeout = 0 }},
 		{name: "job timeout", change: func(value *Limits) { value.Jobs.DefaultTimeout = value.Jobs.MaximumTimeout + 1 }},

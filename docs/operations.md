@@ -44,7 +44,7 @@ unknown result is not permission to continue maintenance.
 | --- | --- |
 | `/usr/lib/lifepowerctl` | Installed binary, uninstaller, and package manifest |
 | `/etc/lifepowerctl/config.json` | Preserved configuration |
-| `/var/lib/lifepowerctl` | Credentials, controller state, schedules, jobs, and Activity |
+| `/var/lib/lifepowerctl` | Credentials, controller state, schedules, jobs, Activity, and the optional host image |
 | `/var/lib/lifepowerctl-jobs` | Runner metadata and bounded output |
 | `/var/lib/lifepowerctl-installer` | Root-only install/rollback metadata |
 | `/run/lifepowerctl` | Runtime sockets |
