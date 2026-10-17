@@ -2,12 +2,16 @@
 
 Last updated: 2026-10-17
 
-The `v0.1.0` release candidate contains the implemented application, owner and
-contributor documentation, production packaging, pull-request CI, security
-analysis, and protected release automation. Hosted validation, attestations,
-independent asset verification, and exact draft-asset acceptance pass on the
-declared ARM64 Trixie and legacy Bookworm scope. Final publication, external
-download-path verification, and release handover are the remaining work.
+[`v0.1.0`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.1.0) is the
+first supported public release. Its immutable ARM64 assets were built from
+commit `fed43f90c744346062a371c5a792da448370f0ab` by the protected release
+workflow. Hosted validation, checksums, SPDX SBOM, attestations, independent
+asset verification, exact target acceptance, and anonymous exact-version and
+latest-release download checks pass for the declared Trixie and legacy
+Bookworm scope.
+
+The public `main` branch is the development authority. First-release work is
+complete; intended later work is tracked in the [roadmap](roadmap.md).
 
 ## Implemented
 
@@ -49,8 +53,8 @@ download-path verification, and release handover are the remaining work.
 - Activity and job output are deliberately bounded rather than permanent.
 - External vendor CLI/daemon or root actions cannot be serialized by the
   application's in-process coordinator.
-- A candidate is not supported until its hosted checks, attestations, exact
-  downloaded assets, and publication gate all pass.
+- Draft releases, development builds, and locally rendered assets are not
+  supported production downloads.
 
 ## Durable invariants
 
