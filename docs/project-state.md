@@ -13,6 +13,15 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
 
+## Development since v0.3.1
+
+- Improved the Overview host-image size and presentation, placed image removal
+  beside the image, and refreshed and expanded the interface screenshots.
+- Made saved-job edit conflicts visible at the save action and linked
+  saved-job lifecycle Activity subjects to the Jobs collection.
+- Limited setup-link completion guidance to installation paths that create a
+  setup link and corrected the production web-service startup description.
+
 ## Implemented
 
 - Read-only board identity, telemetry, diagnostics, and a reviewed register

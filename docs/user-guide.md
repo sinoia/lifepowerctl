@@ -12,12 +12,12 @@ identity as a stop condition for changes. Save diagnostic output only after
 reviewing it for hostnames, paths, job output, or other private information.
 
 The Host system panel can display one optional identifying image. Upload a
-JPEG or PNG of at most 8 MiB and 16 megapixels; the page displays it as a small
-square regardless of its original proportions. Replacing or removing the
-image does not retain a previous copy. The file remains private application
-state, is preserved by ordinary uninstall, and is included when the state
-directory is backed up. Image metadata is retained in the stored original and
-the image is not included in diagnostics or Activity.
+JPEG or PNG of at most 8 MiB and 16 megapixels; the page displays it as a
+fixed framed square regardless of its original proportions. Replacing or
+removing the image does not retain a previous copy. The file remains private
+application state, is preserved by ordinary uninstall, and is included when
+the state directory is backed up. Image metadata is retained in the stored
+original and the image is not included in diagnostics or Activity.
 
 ## Register settings
 
