@@ -2,9 +2,9 @@
 
 Last updated: 2026-10-17
 
-[`v0.3.1`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.3.1) is the
+[`v0.3.2`](https://github.com/sinoia/lifepowerctl/releases/tag/v0.3.2) is the
 current supported public release. Its immutable ARM64 assets were built from
-commit `282b837df291121cdc1acbd4ce20b0a59e301644` by the protected release
+commit `1303f06eaca4ac89782a5c0467ef9cb1edd9b4b7` by the protected release
 workflow. Hosted validation, checksums, SPDX SBOM, provenance and SBOM
 attestations, independent asset verification, and anonymous exact-version and
 latest-release download checks pass. The declared Trixie and legacy Bookworm
@@ -12,15 +12,6 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
-
-## Development since v0.3.1
-
-- Improved the Overview host-image size and presentation, placed image removal
-  beside the image, and refreshed and expanded the interface screenshots.
-- Made saved-job edit conflicts visible at the save action and linked
-  saved-job lifecycle Activity subjects to the Jobs collection.
-- Limited setup-link completion guidance to installation paths that create a
-  setup link and corrected the production web-service startup description.
 
 ## Implemented
 
