@@ -13,6 +13,13 @@ hardware scope is unchanged from the accepted `v0.1.0` baseline.
 The public `main` branch is the development authority. Intended later work is
 tracked in the [roadmap](roadmap.md).
 
+## Development since v0.3.0
+
+- Fixed the `v0.3.0` job-form regression that rejected browser submissions
+  after inactive execution-mode fields were disabled. Saved-job creation,
+  editing, and ad-hoc execution now accept the intended mode-specific payload
+  while retaining strict form validation.
+
 ## Implemented
 
 - Read-only board identity, telemetry, diagnostics, and a reviewed register
