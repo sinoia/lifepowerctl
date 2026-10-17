@@ -247,6 +247,9 @@ func activitySubjectLink(event activity.Event) string {
 	if event.Type == string(activity.DutyCycleConfiguration) || event.Type == string(activity.DutyCycleTransition) {
 		return "/duty-cycle"
 	}
+	if event.Type == string(activity.JobCreated) || event.Type == string(activity.JobUpdated) || event.Type == string(activity.JobDeleted) {
+		return "/jobs"
+	}
 	if (event.Type == string(activity.JobRunRequested) || event.Type == string(activity.JobRunObserved) || event.Type == string(activity.JobRunCancelRequested)) && validRunIdentity(event.Subject) {
 		return "/runs/" + event.Subject
 	}

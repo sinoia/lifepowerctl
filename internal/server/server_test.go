@@ -1246,6 +1246,15 @@ func TestActivityRunSubjectsUseCanonicalRunIdentity(t *testing.T) {
 	}
 }
 
+func TestActivitySavedJobSubjectsLinkToJobs(t *testing.T) {
+	for _, kind := range []activity.Kind{activity.JobCreated, activity.JobUpdated, activity.JobDeleted} {
+		event := activity.Event{Type: string(kind), Subject: "edit-7"}
+		if got := activitySubjectLink(event); got != "/jobs" {
+			t.Errorf("%s subject link = %q", kind, got)
+		}
+	}
+}
+
 func TestJobsPageShowsFixedExecutionIdentity(t *testing.T) {
 	handler, _, session, _ := newTestServer(t, true)
 	page := request(handler, http.MethodGet, "/jobs", nil, &http.Cookie{Name: sessionCookie, Value: session.Token})
