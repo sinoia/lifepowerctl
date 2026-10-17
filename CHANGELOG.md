@@ -5,7 +5,20 @@ All notable user-visible changes will be documented here. The project follows
 
 ## Unreleased
 
-No user-visible changes since `v0.3.1`.
+No user-visible changes since `v0.3.2`.
+
+## v0.3.2 - 2026-10-17
+
+- Improved the Overview host-image size, presentation, and removal-control
+  placement.
+- Reported saved-job edit conflicts next to the save action, including jobs
+  referenced by the duty-cycle run list.
+- Linked saved-job Activity subjects to the Jobs page.
+- Limited one-time setup-link completion guidance to installs that actually
+  create a setup link, while preserving the fresh-install path.
+- Corrected the production web-service startup log description.
+- Refreshed the documented interface screenshots and added Jobs, run history,
+  job editing, Activity, and dark-mode examples.
 
 ## v0.3.1 - 2026-10-17
 

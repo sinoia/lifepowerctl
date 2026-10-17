@@ -351,7 +351,7 @@ func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
 			t.Fatalf("initial overview missing %q: %d: %s", want, initial.Code, initial.Body.String())
 		}
 	}
-	if strings.Contains(initial.Body.String(), `class="host-image"`) || strings.Contains(initial.Body.String(), `action="/host-image/remove"`) {
+	if strings.Contains(initial.Body.String(), `class="host-image"`) || strings.Contains(initial.Body.String(), `action="/host-image/remove"`) || strings.Contains(initial.Body.String(), `Replace image`) {
 		t.Fatalf("initial overview presents a stored image: %s", initial.Body.String())
 	}
 
@@ -361,9 +361,15 @@ func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
 		t.Fatalf("upload response = %d, %q: %s", upload.Code, upload.Header().Get("Location"), upload.Body.String())
 	}
 	overviewPage := request(handler, http.MethodGet, "/", nil, cookie)
-	for _, want := range []string{`class="host-image" src="/host-image" alt="Host demo-pi"`, `Replace image`, `action="/host-image/remove"`, `Remove image`} {
+	for _, want := range []string{`class="host-image-row"><span class="host-image-frame"><img class="host-image" src="/host-image" alt="Host demo-pi"></span><form class="host-image-remove" action="/host-image/remove"`, `Replace image`, `Remove image`} {
 		if !strings.Contains(overviewPage.Body.String(), want) {
 			t.Fatalf("overview missing %q after upload: %s", want, overviewPage.Body.String())
+		}
+	}
+	stylesheet := request(handler, http.MethodGet, "/static/app.css", nil)
+	for _, want := range []string{`.host-image-row { display: flex; flex-wrap: wrap; align-items: center;`, `.host-image-frame { display: inline-flex; max-width: 100%; padding: .35rem; border: 1px solid var(--border); background: var(--surface-raised); box-shadow:`, `.host-image { display: block; width: 30mm; height: 30mm;`} {
+		if stylesheet.Code != http.StatusOK || !strings.Contains(stylesheet.Body.String(), want) {
+			t.Fatalf("host-image styling missing %q: %d: %s", want, stylesheet.Code, stylesheet.Body.String())
 		}
 	}
 	imageResponse := request(handler, http.MethodGet, "/host-image", nil, cookie)
@@ -1166,7 +1172,9 @@ func TestSavedJobCreateEditDeleteAndActivity(t *testing.T) {
 		t.Fatalf("update response = %d: %s", updated.Code, updated.Body.String())
 	}
 	stale := postForm(handler, "/jobs/"+id, jobForm, cookie)
-	if stale.Code != http.StatusUnprocessableEntity || !strings.Contains(stale.Body.String(), "changed after the form was loaded") {
+	if stale.Code != http.StatusUnprocessableEntity || !strings.Contains(stale.Body.String(), "changed after the form was loaded") ||
+		!strings.Contains(stale.Body.String(), `id="job-form-error"`) || !strings.Contains(stale.Body.String(), `tabindex="-1"`) ||
+		!strings.Contains(stale.Body.String(), "Job not saved.") {
 		t.Fatalf("stale update response = %d: %s", stale.Code, stale.Body.String())
 	}
 	run := postForm(handler, "/jobs/"+id+"/run", url.Values{"csrf": {session.CSRFToken}, "revision": {"2"}}, cookie)
@@ -1238,6 +1246,15 @@ func TestActivityRunSubjectsUseCanonicalRunIdentity(t *testing.T) {
 	}
 }
 
+func TestActivitySavedJobSubjectsLinkToJobs(t *testing.T) {
+	for _, kind := range []activity.Kind{activity.JobCreated, activity.JobUpdated, activity.JobDeleted} {
+		event := activity.Event{Type: string(kind), Subject: "edit-7"}
+		if got := activitySubjectLink(event); got != "/jobs" {
+			t.Errorf("%s subject link = %q", kind, got)
+		}
+	}
+}
+
 func TestJobsPageShowsFixedExecutionIdentity(t *testing.T) {
 	handler, _, session, _ := newTestServer(t, true)
 	page := request(handler, http.MethodGet, "/jobs", nil, &http.Cookie{Name: sessionCookie, Value: session.Token})
@@ -1259,7 +1276,7 @@ func TestJobFormsExposeModeSpecificProgressiveEnhancement(t *testing.T) {
 			`data-execution-fields="direct"`,
 			`data-execution-fields="shell"`,
 			`data-execution-required`,
-			`/static/jobs.js?v=1`,
+			`/static/jobs.js?v=2`,
 			`JavaScript is off.`,
 			`Optional; one argument per non-empty line.`,
 		} {
@@ -1269,9 +1286,18 @@ func TestJobFormsExposeModeSpecificProgressiveEnhancement(t *testing.T) {
 		}
 	}
 	asset := request(handler, http.MethodGet, "/static/jobs.js", nil)
-	for _, want := range []string{`[data-job-form]`, `[data-execution-fields]`, `control.disabled = !active`, `control.required = active`, `mode.addEventListener("change"`} {
+	for _, want := range []string{`[data-job-form]`, `[data-execution-fields]`, `control.disabled = !active`, `control.required = active`, `mode.addEventListener("change"`, `getElementById("job-form-error")`, `error.focus()`, `error.scrollIntoView`} {
 		if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), want) {
 			t.Fatalf("job enhancement missing %q: %d: %s", want, asset.Code, asset.Body.String())
+		}
+	}
+}
+
+func TestReferencedJobUpdateErrorExplainsRequiredDutyCycleChange(t *testing.T) {
+	message := jobFormError(controllerstate.ErrJobInRunList)
+	for _, want := range []string{"referenced by the duty-cycle run list", "Remove it there before changing"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("referenced-job error missing %q: %q", want, message)
 		}
 	}
 }

@@ -1458,6 +1458,15 @@ mutate_restore() {
     rollback_authorized=0
 }
 
+print_authentication_guidance() {
+    if [ "$installation_action" = fresh ]; then
+        note "Local setup URL: http://127.0.0.1:${web_port}/ (use the one-time setup link printed above)."
+        note 'The setup link was printed only to your terminal and was not retained by the installer.'
+    else
+        note "Local administration URL: http://127.0.0.1:${web_port}/ (existing authentication data was preserved)."
+    fi
+}
+
 # The renderer replaces this marker with reviewed policy-printing functions.
 # @EMBED_POLICY_FUNCTIONS@
 
@@ -1533,14 +1542,9 @@ esac
 note "LifePower Control ${RELEASE_VERSION} $installation_action completed successfully."
 note "Installed and running version: ${RELEASE_VERSION} (${RELEASE_COMMIT})"
 note 'Services: job runner, controller, and web are ready; board is ready; maintenance is safe.'
-if [ "$installation_action" = restore ]; then
-    note "Local administration URL: http://127.0.0.1:${web_port}/ (existing authentication data was preserved)."
-else
-    note "Local setup URL: http://127.0.0.1:${web_port}/ (use the one-time setup link printed above)."
-fi
+print_authentication_guidance
 note "Remote browser tunnel: ssh -N -L ${web_port}:127.0.0.1:${web_port} USER@PI-HOST"
 note "Selected job identity: $job_user (inherited authority was reported before confirmation)."
 note 'Logs: sudo journalctl -u lifepowerctl-controller -u lifepowerctl-job-runner -u lifepowerctl'
 note 'Uninstall (data preserving): sudo /usr/lib/lifepowerctl/uninstall.sh'
-if [ "$installation_action" != restore ]; then note 'The setup link was printed only to your terminal and was not retained by the installer.'; fi
 if [ "$web_lifecycle" = on-demand ]; then note 'Web is running for setup but is not enabled at boot; stop it when setup is complete.'; fi

@@ -692,7 +692,7 @@ func serve(args []string) error {
 
 	serveResult := make(chan error, 1)
 	go func() {
-		log.Printf("LifePower Control development shell listening on http://%s", listener.Addr())
+		log.Print(webListeningMessage(listener.Addr().String()))
 		serveResult <- httpServer.Serve(listener)
 	}()
 
@@ -707,6 +707,10 @@ func serve(args []string) error {
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	}
+}
+
+func webListeningMessage(address string) string {
+	return fmt.Sprintf("LifePower Control web administration service listening on http://%s", address)
 }
 
 type adminEnvironment struct {

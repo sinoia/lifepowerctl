@@ -19,7 +19,6 @@
 {{ define "job-adhoc" }}{{ template "header" . }}
   <p><a href="/jobs">← Jobs</a></p><div class="page-heading"><p class="eyebrow">Manual execution</p><h1>{{ .Heading }}</h1><p class="lead">{{ .Lead }}</p></div>
   <div class="notice"><strong>No power side effects.</strong> This action cannot add a schedule, program a wake, shut down, or reboot the Pi.</div>
-  {{ if .Error }}<div class="notice notice-error" role="alert">{{ .Error }}</div>{{ end }}
   <form class="card job-form" action="/jobs/run" method="post" data-job-form data-busy-form data-busy-label="Requesting run…">
     <input type="hidden" name="csrf" value="{{ .CSRFToken }}">
     <label for="adhoc-save">Run and save choice</label><select id="adhoc-save" name="save"><option value="false" {{ if eq .Save "false" }}selected{{ end }}>Run once without saving</option><option value="true" {{ if eq .Save "true" }}selected{{ end }}>Save definition, then run</option></select>
@@ -32,9 +31,10 @@
     <label for="adhoc-directory">Working directory</label><input id="adhoc-directory" name="working_directory" value="{{ .WorkingDirectory }}" maxlength="4096" required>
     <label for="adhoc-environment">Environment</label><textarea id="adhoc-environment" name="environment" rows="5">{{ .Environment }}</textarea><span class="helper">Optional <code>NAME=value</code> entries. Output and Activity may expose program behaviour; do not place secrets here.</span>
     <div class="form-grid"><div><label for="adhoc-timeout">Timeout (seconds)</label><input id="adhoc-timeout" name="timeout_seconds" type="number" min="1" value="{{ .TimeoutSeconds }}" required></div><div><label for="adhoc-stdout">Stdout limit (bytes)</label><input id="adhoc-stdout" name="stdout_bytes" type="number" min="1" value="{{ .StdoutBytes }}" required></div><div><label for="adhoc-stderr">Stderr limit (bytes)</label><input id="adhoc-stderr" name="stderr_bytes" type="number" min="1" value="{{ .StderrBytes }}" required></div></div>
+    {{ if .Error }}<div id="job-form-error" class="notice notice-error" role="alert" tabindex="-1"><strong>Command not submitted.</strong> {{ .Error }}</div>{{ end }}
     <div class="button-row"><button type="submit" data-submit-button><span data-button-label>Run now</span></button><a class="button-secondary" href="/jobs">Cancel</a></div>
   </form>
-  <script src="/static/jobs.js?v=1" defer></script>
+  <script src="/static/jobs.js?v=2" defer></script>
 {{ template "footer" . }}{{ end }}
 
 {{ define "job-run" }}{{ template "header" . }}
@@ -46,7 +46,6 @@
 
 {{ define "job-form" }}{{ template "header" . }}
   <p><a href="/jobs">← Jobs</a></p><div class="page-heading"><p class="eyebrow">Definition only</p><h1>{{ .Heading }}</h1><p class="lead">{{ .Lead }}</p></div>
-  {{ if .Error }}<div class="notice notice-error" role="alert">{{ .Error }}</div>{{ end }}
   <form class="card job-form" action="{{ .Action }}" method="post" data-job-form data-busy-form data-busy-label="Saving job…">
     <input type="hidden" name="csrf" value="{{ .CSRFToken }}"><input type="hidden" name="revision" value="{{ .Revision }}">
     <label for="job-name">Name</label><input id="job-name" name="name" value="{{ .Name }}" maxlength="128" required>
@@ -59,9 +58,10 @@
     <label for="job-directory">Working directory</label><input id="job-directory" name="working_directory" value="{{ .WorkingDirectory }}" maxlength="4096" required>
     <label for="job-environment">Environment</label><textarea id="job-environment" name="environment" rows="5" aria-describedby="environment-help">{{ .Environment }}</textarea><span id="environment-help" class="helper">Optional <code>NAME=value</code> entries, one per non-empty line. Values are stored in the private controller snapshot; do not enter secrets during this initial slice.</span>
     <div class="form-grid"><div><label for="job-timeout">Timeout (seconds)</label><input id="job-timeout" name="timeout_seconds" type="number" min="1" value="{{ .TimeoutSeconds }}" required></div><div><label for="job-stdout">Stdout limit (bytes)</label><input id="job-stdout" name="stdout_bytes" type="number" min="1" value="{{ .StdoutBytes }}" required></div><div><label for="job-stderr">Stderr limit (bytes)</label><input id="job-stderr" name="stderr_bytes" type="number" min="1" value="{{ .StderrBytes }}" required></div></div>
+    {{ if .Error }}<div id="job-form-error" class="notice notice-error" role="alert" tabindex="-1"><strong>Job not saved.</strong> {{ .Error }}</div>{{ end }}
     <div class="button-row"><button type="submit" data-submit-button><span data-button-label>{{ .SubmitLabel }}</span></button><a class="button-secondary" href="/jobs">Cancel</a></div>
   </form>
-  <script src="/static/jobs.js?v=1" defer></script>
+  <script src="/static/jobs.js?v=2" defer></script>
 {{ template "footer" . }}{{ end }}
 
 {{ define "job-delete" }}{{ template "header" . }}

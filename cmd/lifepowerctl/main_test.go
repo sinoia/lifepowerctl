@@ -68,6 +68,17 @@ func TestServeConfigurationDefaultsToLoopback(t *testing.T) {
 	}
 }
 
+func TestWebListeningMessageUsesProductionServiceName(t *testing.T) {
+	got := webListeningMessage("127.0.0.1:8080")
+	want := "LifePower Control web administration service listening on http://127.0.0.1:8080"
+	if got != want {
+		t.Fatalf("web listening message = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "development shell") {
+		t.Fatalf("web listening message retains development wording: %q", got)
+	}
+}
+
 func TestVersionOutputHasHumanAndMachineContracts(t *testing.T) {
 	originalVersion, originalCommit, originalSourceState := version, commit, sourceState
 	version, commit, sourceState = "v0.1.0-rc.1", "0123456789abcdef0123456789abcdef01234567", "clean"

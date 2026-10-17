@@ -138,7 +138,10 @@ h2 { margin-top: 2.5rem; line-height: 1.2; }
 .status-list div { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: .55rem 0; border-top: 1px solid var(--border); }
 .status-list dt { color: var(--muted); }
 .status-list dd { margin: 0; font-family: var(--mono); overflow-wrap: anywhere; }
-.host-image { display: block; width: 15mm; height: 15mm; max-width: 100%; margin: 1rem 0; border: 1px solid var(--border); object-fit: cover; }
+.host-image-row { display: flex; flex-wrap: wrap; align-items: center; gap: 1rem; margin: 1rem 0; }
+.host-image-frame { display: inline-flex; max-width: 100%; padding: .35rem; border: 1px solid var(--border); background: var(--surface-raised); box-shadow: 0 .4rem 1rem rgb(0 0 0 / 22%); }
+.host-image { display: block; width: 30mm; height: 30mm; max-width: 100%; object-fit: cover; }
+.host-image-remove { margin: 0; }
 .host-image-upload { margin-top: 1rem; }
 .host-image-upload input[type="file"] { width: 100%; }
 
