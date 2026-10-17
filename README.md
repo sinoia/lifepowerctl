@@ -13,7 +13,7 @@ directly to the Internet.
 
 ## Release status
 
-`v0.3.0` is the current supported release. Install only a version shown as
+`v0.3.1` is the current supported release. Install only a version shown as
 published on this repository's GitHub Releases page. Draft releases,
 development builds, and locally rendered assets are not supported production
 downloads.
