@@ -4,10 +4,10 @@ This directory defines the release-asset contract used by local candidate
 builds and the official GitHub release workflow. It contains source templates,
 not published or directly executable release assets.
 
-For version `v0.1.0`, the ARM64 asset set is:
+For version `v0.2.0`, the ARM64 asset set is:
 
 ```text
-lifepowerctl_0.1.0_linux_arm64.tar.gz
+lifepowerctl_0.2.0_linux_arm64.tar.gz
 install.sh
 uninstall.sh
 SBOM.spdx.json
@@ -25,7 +25,7 @@ An official release supplies the exact-tag URL, checksums, provenance, and
 attestation. Preserve this save, verify, inspect, then execute journey:
 
 ```console
-wget -O install.sh "https://github.com/sinoia/lifepowerctl/releases/download/v0.1.0/install.sh"
+wget -O install.sh "https://github.com/sinoia/lifepowerctl/releases/download/v0.2.0/install.sh"
 chmod 0600 install.sh
 sha256sum install.sh
 sh -n install.sh
@@ -34,7 +34,7 @@ less install.sh
 sudo sh ./install.sh
 ```
 
-Use these URLs only when GitHub shows `v0.1.0` as a published release. Later
+Use these URLs only when GitHub shows `v0.2.0` as a published release. Later
 releases replace that tag with their exact immutable version. The operator
 compares the first checksum with the independently obtained published `checksums.txt`
 before execution and verifies the GitHub attestation. Interactive installation displays
@@ -43,7 +43,7 @@ job identity, web lifecycle, and mutation summary before confirmation. For
 automation, both choices must be explicit:
 
 ```console
-sudo sh ./install.sh --non-interactive --job-user pi --web=enabled
+sudo sh ./install.sh --non-interactive --job-user pi --web=enabled --port 18081
 ```
 
 Use `--web=on-demand` instead only when the owner wants the controller and
@@ -54,10 +54,12 @@ sudo systemctl start lifepowerctl.service
 sudo systemctl stop lifepowerctl.service
 ```
 
-The web listener remains on loopback. From the browser workstation:
+The web listener remains on loopback. Port `8080` is the default; `--port`
+accepts an unprivileged port from `1024` through `65535`. From the browser
+workstation, use the selected installation port on both sides of the tunnel:
 
 ```console
-ssh -N -L 8080:127.0.0.1:8080 pi@raspberrypi.local
+ssh -N -L 18081:127.0.0.1:18081 pi@raspberrypi.local
 ```
 
 Local bounded status and ordinary data-preserving uninstall are:
@@ -106,7 +108,7 @@ renderer compares it with the requested release before archiving.
 From a clean tracked working tree:
 
 ```console
-make release VERSION=v0.1.0-rc.1
+make release VERSION=v0.2.0-rc.1
 ```
 
 The renderer performs one constrained ARM64 Go build, refuses development or
@@ -143,10 +145,14 @@ upgrade, or downgrade. Same-version is a read-only verification and exits
 before staging. Upgrade and explicitly allowed downgrade require healthy,
 maintenance-safe local status, exact existing identities and paths, and
 two-way durable-schema compatibility. They preserve configuration and all
-application/job data, retain the selected job identity and web lifecycle, and
-replace only package machinery. A root-only previous-payload directory and
-lifecycle transaction restore the prior payload, units, policy, installed
-record, enablement, and prior web activity after failure or `--recover`.
+application/job data, retain the selected job identity, web lifecycle, and
+loopback port, and replace only package machinery. Format-1 `v0.1.0` metadata
+defaults to port `8080`; an explicit `--port` lets the first upgrade adopt an
+already customized loopback port after its health check succeeds. Format-2
+records make the port mandatory and immutable during routine verification and
+updates. A root-only previous-payload directory and lifecycle transaction
+restore the prior payload, units, policy, installed record, enablement, port,
+and prior web activity after failure or `--recover`.
 
 The installed uninstaller is release-bound and validates the exact installed
 record, account/group shape, owned-file manifest, package paths, local service
@@ -158,7 +164,8 @@ that still own those paths. A caught failure restores automatically; after an
 abrupt interruption the saved backup uninstaller provides `--recover`.
 
 Successful uninstall leaves one root-only `preserved` record containing the
-selected job user, web lifecycle, previous release identity, and durable schema.
+selected job user, web lifecycle, web port, previous release identity, and
+durable schema.
 The installer recognizes only that closed state, checks target schema
 compatibility, and can reinstall without replacing preserved data or creating
 new credentials. Its reinstall transaction returns to the safely uninstalled

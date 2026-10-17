@@ -604,6 +604,105 @@ func TestRenderedInstallerClassifiesInstalledLifecycleAndRequiresExplicitDowngra
 	}
 }
 
+func TestRenderedInstallerValidatesInstallationPorts(t *testing.T) {
+	prefix := renderedInstallerPrefix(t)
+	tests := []struct {
+		port string
+		ok   bool
+	}{
+		{port: "1024", ok: true},
+		{port: "8080", ok: true},
+		{port: "65535", ok: true},
+		{port: ""},
+		{port: "0"},
+		{port: "80"},
+		{port: "01024"},
+		{port: "65536"},
+		{port: "service"},
+	}
+	for _, test := range tests {
+		t.Run(test.port, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "port.sh")
+			if err := os.WriteFile(path, []byte(prefix+"\nvalidate_web_port \"$1\"\n"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			output, err := exec.Command("/bin/sh", path, test.port).CombinedOutput()
+			if test.ok && err != nil {
+				t.Fatalf("valid port refused: %v\n%s", err, output)
+			}
+			if !test.ok && (err == nil || !strings.Contains(string(output), "port must")) {
+				t.Fatalf("invalid port accepted or wrong failure: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func TestRenderedInstallerRendersAndChecksSelectedPort(t *testing.T) {
+	prefix := renderedInstallerPrefix(t)
+	work := t.TempDir()
+	logPath := filepath.Join(work, "wget.log")
+	script := prefix + `
+web_port=18081
+job_user=tester
+job_uid=1000
+job_group=tester
+job_home=/home/tester
+work_directory="$TEST_WORK"
+id() { printf '%s\n' 900; }
+visudo() { :; }
+prepare_policy
+grep -Fqx '  "listen_address": "127.0.0.1:18081",' "$policy/config.json"
+grep -Fqx '  "external_origin": "http://127.0.0.1:18081",' "$policy/config.json"
+! grep -q '@WEB_PORT@' "$policy/config.json"
+have() { [ "$1" = wget ]; }
+timeout() { shift; "$@"; }
+wget() { printf '%s\n' "$*" >"$TEST_LOG"; }
+check_web_health
+grep -Fq 'http://127.0.0.1:18081/healthz' "$TEST_LOG"
+`
+	path := filepath.Join(t.TempDir(), "selected-port.sh")
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command("/bin/sh", path)
+	command.Env = append(os.Environ(), "TEST_WORK="+work, "TEST_LOG="+logPath)
+	if output, err := command.CombinedOutput(); err != nil {
+		t.Fatalf("selected port was not rendered and checked: %v\n%s", err, output)
+	}
+}
+
+func TestRenderedInstallerLoadsRecordedAndLegacyPorts(t *testing.T) {
+	prefix := renderedInstallerPrefix(t)
+	for _, test := range []struct {
+		name, record, requested, want string
+	}{
+		{name: "recorded", record: "format=2\nversion=v0.0.9\ncommit=" + strings.Repeat("1", 40) + "\njob_user=tester\nweb=enabled\nport=18081\n", requested: "8080", want: "18081"},
+		{name: "legacy default", record: "format=1\nversion=v0.0.9\ncommit=" + strings.Repeat("1", 40) + "\njob_user=tester\nweb=enabled\n", requested: "8080", want: "8080"},
+		{name: "legacy adopted custom", record: "format=1\nversion=v0.0.9\ncommit=" + strings.Repeat("1", 40) + "\njob_user=tester\nweb=enabled\n", requested: "18081", want: "18081"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			paths := recoveryHarnessPaths(t.TempDir())
+			if err := os.Mkdir(paths.metadata, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(paths.metadata, "installed"), []byte(test.record), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := prefix + recoveryHarnessOverrides(paths) + "\nweb_port=" + test.requested + "\nallow_downgrade=0\nload_installation_record\nprintf '%s\\n' \"$installed_port\"\n"
+			path := filepath.Join(t.TempDir(), "load-port.sh")
+			if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			command := exec.Command("/bin/sh", path)
+			command.Env = append(os.Environ(), "TEST_TOOLS=/usr/bin", fmt.Sprintf("TEST_UID=%d", os.Getuid()), fmt.Sprintf("TEST_GID=%d", os.Getgid()))
+			output, err := command.CombinedOutput()
+			if err != nil || strings.TrimSpace(string(output)) != test.want {
+				t.Fatalf("loaded port = %q, %v; want %q", output, err, test.want)
+			}
+		})
+	}
+}
+
 func TestRenderedInstallerRequiresTwoWayStateSchemaCompatibility(t *testing.T) {
 	prefix := renderedInstallerPrefix(t)
 	tests := []struct {
@@ -790,7 +889,7 @@ func TestRenderedInstallerChecksEveryFreshDestinationAndCollision(t *testing.T) 
 		{name: "service user", getent: "service-user", required: "account collision"},
 		{name: "service group", getent: "service-group", required: "group collision"},
 		{name: "jobs group", getent: "jobs-group", required: "group collision"},
-		{name: "port", portBusy: true, required: "TCP port 8080 is already listening"},
+		{name: "port", portBusy: true, required: "TCP port 18081 is already listening"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -818,7 +917,11 @@ func TestRenderedInstallerChecksEveryFreshDestinationAndCollision(t *testing.T) 
 				}
 			}
 			tools := writeFreshCollisionTools(t, test.getent, test.portBusy)
-			harness := prefix + recoveryHarnessOverrides(paths) + "\ncheck_fresh_destinations\n"
+			harness := prefix + recoveryHarnessOverrides(paths)
+			if test.portBusy {
+				harness += "\nweb_port=18081\n"
+			}
+			harness += "\ncheck_fresh_destinations\n"
 			path := filepath.Join(t.TempDir(), "collision.sh")
 			if err := os.WriteFile(path, []byte(harness), 0o700); err != nil {
 				t.Fatal(err)
@@ -851,7 +954,7 @@ exit 2
 `
 	ss := "#!/bin/sh\nexit 0\n"
 	if portBusy {
-		ss = "#!/bin/sh\nprintf '%s\\n' 'LISTEN 0 128 127.0.0.1:8080 0.0.0.0:*'\n"
+		ss = "#!/bin/sh\nprintf '%s\\n' 'LISTEN 0 128 127.0.0.1:18081 0.0.0.0:*'\n"
 	}
 	for name, body := range map[string]string{"getent": getent, "ss": ss} {
 		if err := os.WriteFile(filepath.Join(tools, name), []byte(body), 0o755); err != nil {
@@ -1251,6 +1354,8 @@ job_group=tester
 job_home=/tmp
 controller_uid="$TEST_UID"
 web_lifecycle=enabled
+web_port=18081
+installed_port=18081
 installed_version=v0.0.9
 installed_commit=1111111111111111111111111111111111111111
 previous_schema_minimum=1
@@ -1284,6 +1389,12 @@ mutate_lifecycle
 				t.Fatalf("lifecycle update failed: %v\n%s", err, output)
 			}
 			assertLifecycleFixture(t, fixture, test.wantVersion, test.wantCommit)
+			if !test.wantFailure {
+				installed := readTestFile(t, filepath.Join(fixture.paths.metadata, "installed"))
+				if !strings.Contains(installed, "format=2\n") || !strings.Contains(installed, "port=18081\n") {
+					t.Fatalf("successful legacy upgrade did not record adopted port:\n%s", installed)
+				}
+			}
 		})
 	}
 }
@@ -1933,7 +2044,7 @@ func renderedInstallerPrefix(t *testing.T) string {
 	if !found {
 		t.Fatal("could not isolate rendered installer functions")
 	}
-	return prefix
+	return prefix + "\nweb_port=8080\ninstalled_port=8080\n"
 }
 
 func writeInstallerFixtureArchive(t *testing.T, destination string) {

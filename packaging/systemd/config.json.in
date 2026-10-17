@@ -1,8 +1,8 @@
 {
-  "listen_address": "127.0.0.1:8080",
+  "listen_address": "127.0.0.1:@WEB_PORT@",
   "state_directory": "/var/lib/lifepowerctl",
   "activity_directory": "/var/lib/lifepowerctl/activity",
-  "external_origin": "http://127.0.0.1:8080",
+  "external_origin": "http://127.0.0.1:@WEB_PORT@",
   "acknowledge_non_loopback": false,
   "job_identity": {
     "user": "@JOB_USER@",

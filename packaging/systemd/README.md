@@ -57,6 +57,11 @@ owners or types at every destination. It creates a fresh configuration with
 exclusive-create semantics, then validates and preserves that exact file on
 reinstall or upgrade rather than silently replacing local settings.
 
+The fresh configuration also renders the installer-selected unprivileged
+loopback port into `listen_address` and `external_origin`. Root-only lifecycle
+metadata records that port so installer, uninstaller, rollback, and recovery
+health checks remain bound to the preserved configuration.
+
 ## Template substitutions
 
 - `@JOB_USER@`: selected ordinary login name.

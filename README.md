@@ -80,9 +80,11 @@ cycle.
 For a published release, follow the exact-version download and verification
 procedure in [Installation](docs/installation.md). The installer checks the OS
 architecture, manufacturer prerequisite, accounts, paths, and service policy
-before making changes.
+before making changes. It uses loopback port `8080` by default; pass
+`--port PORT` during a fresh install to select another unprivileged port.
 
-After installation, open an SSH tunnel from your normal computer:
+After installation, open an SSH tunnel from your normal computer, using the
+port printed by the installer on both sides. For the default:
 
 ```console
 ssh -N -L 8080:127.0.0.1:8080 pi@raspberrypi.local

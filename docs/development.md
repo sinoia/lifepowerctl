@@ -57,7 +57,7 @@ procedure and authorization described in [AGENTS.md](../AGENTS.md).
 
 ## Release development
 
-`make release VERSION=v0.1.0-rc.1` renders a local candidate only from a clean,
+`make release VERSION=v0.2.0-rc.1` renders a local candidate only from a clean,
 committed tree with valid version metadata. Local assets are not a public
 release. Maintainer CI owns official assets, SBOM, provenance, attestations,
 supported-image verification, and human-approved publication.

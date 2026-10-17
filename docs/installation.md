@@ -27,8 +27,8 @@ On the selected GitHub release page, save `install.sh` and `checksums.txt` for
 the same immutable tag. Do not pipe a network response into `sudo sh`.
 
 ```console
-wget -O install.sh https://github.com/sinoia/lifepowerctl/releases/download/v0.1.0/install.sh
-wget -O checksums.txt https://github.com/sinoia/lifepowerctl/releases/download/v0.1.0/checksums.txt
+wget -O install.sh https://github.com/sinoia/lifepowerctl/releases/download/v0.2.0/install.sh
+wget -O checksums.txt https://github.com/sinoia/lifepowerctl/releases/download/v0.2.0/checksums.txt
 chmod 0600 install.sh
 grep ' install.sh$' checksums.txt
 sha256sum install.sh
@@ -37,7 +37,7 @@ sh ./install.sh --release-info
 less install.sh
 ```
 
-For a later release, replace `v0.1.0` in both URLs with that exact published
+For a later release, replace `v0.2.0` in both URLs with that exact published
 tag. If an exact URL does not resolve to a published release, stop. Compare the
 calculated digest with the single `install.sh` entry in `checksums.txt`. Then follow
 [Release verification](release-verification.md) to verify the GitHub
@@ -49,10 +49,10 @@ place the three assets consumed by the installer in a protected root-owned
 directory:
 
 ```console
-sudo install -d -o root -g root -m 0700 /root/lifepowerctl-assets-v0.1.0
+sudo install -d -o root -g root -m 0700 /root/lifepowerctl-assets-v0.2.0
 sudo install -o root -g root -m 0600 checksums.txt \
-  lifepowerctl_0.1.0_linux_arm64.tar.gz uninstall.sh \
-  /root/lifepowerctl-assets-v0.1.0/
+  lifepowerctl_0.2.0_linux_arm64.tar.gz uninstall.sh \
+  /root/lifepowerctl-assets-v0.2.0/
 ```
 
 Keep using the exact `install.sh` downloaded and verified for the same tag.
@@ -70,20 +70,28 @@ To consume the protected local assets prepared above without another network
 download, use:
 
 ```console
-sudo sh ./install.sh --asset-dir /root/lifepowerctl-assets-v0.1.0
+sudo sh ./install.sh --asset-dir /root/lifepowerctl-assets-v0.2.0
 ```
 
 Local assets pass the same size, checksum, archive, uninstaller, and embedded
 binary-identity checks as downloaded assets.
 
 The installer reports the fixed release, detected platform and board
-prerequisite, selected job account, proposed web-service lifecycle, and every
-system location it will change. Review the summary before confirming.
+prerequisite, selected job account, proposed web-service lifecycle and
+loopback port, and every system location it will change. Review the summary
+before confirming. Port `8080` is used by default. To select another
+unprivileged loopback port, use `--port PORT`, for example:
+
+```console
+sudo sh ./install.sh --port 18081
+```
+
+The accepted range is `1024` through `65535`. The selected port must be free.
 
 For unattended provisioning, both choices must be explicit:
 
 ```console
-sudo sh ./install.sh --non-interactive --job-user pi --web=enabled
+sudo sh ./install.sh --non-interactive --job-user pi --web=enabled --port 18081
 ```
 
 Replace `pi` with the ordinary account that should own saved jobs. Use
@@ -100,14 +108,15 @@ has, so choose it deliberately.
 
 Fresh installation prints a one-time setup URL only to the controlling
 terminal. It is a secret and expires. From another computer, first create an
-SSH tunnel:
+SSH tunnel, using the installation port printed by the installer:
 
 ```console
-ssh -N -L 8080:127.0.0.1:8080 pi@raspberrypi.local
+ssh -N -L 18081:127.0.0.1:18081 pi@raspberrypi.local
 ```
 
 Replace the example account and hostname with those configured on your Pi.
-Open the printed setup URL using `127.0.0.1:8080` in that browser. Choose the
+Open the printed setup URL using `127.0.0.1:18081` in that browser. Replace
+`18081` with the selected installation port. Choose the
 owner password, then sign in. Do not paste the setup URL into chat, logs, issue
 reports, or screenshots.
 
