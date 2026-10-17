@@ -19,4 +19,10 @@
     updateExecutionFields();
     mode.addEventListener("change", updateExecutionFields);
   });
+
+  var error = document.getElementById("job-form-error");
+  if (error) {
+    error.focus();
+    error.scrollIntoView({ block: "center" });
+  }
 }());

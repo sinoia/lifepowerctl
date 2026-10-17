@@ -1166,7 +1166,9 @@ func TestSavedJobCreateEditDeleteAndActivity(t *testing.T) {
 		t.Fatalf("update response = %d: %s", updated.Code, updated.Body.String())
 	}
 	stale := postForm(handler, "/jobs/"+id, jobForm, cookie)
-	if stale.Code != http.StatusUnprocessableEntity || !strings.Contains(stale.Body.String(), "changed after the form was loaded") {
+	if stale.Code != http.StatusUnprocessableEntity || !strings.Contains(stale.Body.String(), "changed after the form was loaded") ||
+		!strings.Contains(stale.Body.String(), `id="job-form-error"`) || !strings.Contains(stale.Body.String(), `tabindex="-1"`) ||
+		!strings.Contains(stale.Body.String(), "Job not saved.") {
 		t.Fatalf("stale update response = %d: %s", stale.Code, stale.Body.String())
 	}
 	run := postForm(handler, "/jobs/"+id+"/run", url.Values{"csrf": {session.CSRFToken}, "revision": {"2"}}, cookie)
@@ -1259,7 +1261,7 @@ func TestJobFormsExposeModeSpecificProgressiveEnhancement(t *testing.T) {
 			`data-execution-fields="direct"`,
 			`data-execution-fields="shell"`,
 			`data-execution-required`,
-			`/static/jobs.js?v=1`,
+			`/static/jobs.js?v=2`,
 			`JavaScript is off.`,
 			`Optional; one argument per non-empty line.`,
 		} {
@@ -1269,9 +1271,18 @@ func TestJobFormsExposeModeSpecificProgressiveEnhancement(t *testing.T) {
 		}
 	}
 	asset := request(handler, http.MethodGet, "/static/jobs.js", nil)
-	for _, want := range []string{`[data-job-form]`, `[data-execution-fields]`, `control.disabled = !active`, `control.required = active`, `mode.addEventListener("change"`} {
+	for _, want := range []string{`[data-job-form]`, `[data-execution-fields]`, `control.disabled = !active`, `control.required = active`, `mode.addEventListener("change"`, `getElementById("job-form-error")`, `error.focus()`, `error.scrollIntoView`} {
 		if asset.Code != http.StatusOK || !strings.Contains(asset.Body.String(), want) {
 			t.Fatalf("job enhancement missing %q: %d: %s", want, asset.Code, asset.Body.String())
+		}
+	}
+}
+
+func TestReferencedJobUpdateErrorExplainsRequiredDutyCycleChange(t *testing.T) {
+	message := jobFormError(controllerstate.ErrJobInRunList)
+	for _, want := range []string{"referenced by the duty-cycle run list", "Remove it there before changing"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("referenced-job error missing %q: %q", want, message)
 		}
 	}
 }
