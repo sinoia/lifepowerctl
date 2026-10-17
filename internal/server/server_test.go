@@ -351,7 +351,7 @@ func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
 			t.Fatalf("initial overview missing %q: %d: %s", want, initial.Code, initial.Body.String())
 		}
 	}
-	if strings.Contains(initial.Body.String(), `class="host-image"`) || strings.Contains(initial.Body.String(), `action="/host-image/remove"`) {
+	if strings.Contains(initial.Body.String(), `class="host-image"`) || strings.Contains(initial.Body.String(), `action="/host-image/remove"`) || strings.Contains(initial.Body.String(), `Replace image`) {
 		t.Fatalf("initial overview presents a stored image: %s", initial.Body.String())
 	}
 
@@ -361,9 +361,15 @@ func TestHostImageUploadDisplayAndRemoval(t *testing.T) {
 		t.Fatalf("upload response = %d, %q: %s", upload.Code, upload.Header().Get("Location"), upload.Body.String())
 	}
 	overviewPage := request(handler, http.MethodGet, "/", nil, cookie)
-	for _, want := range []string{`class="host-image" src="/host-image" alt="Host demo-pi"`, `Replace image`, `action="/host-image/remove"`, `Remove image`} {
+	for _, want := range []string{`class="host-image-row"><img class="host-image" src="/host-image" alt="Host demo-pi"><form class="host-image-remove" action="/host-image/remove"`, `Replace image`, `Remove image`} {
 		if !strings.Contains(overviewPage.Body.String(), want) {
 			t.Fatalf("overview missing %q after upload: %s", want, overviewPage.Body.String())
+		}
+	}
+	stylesheet := request(handler, http.MethodGet, "/static/app.css", nil)
+	for _, want := range []string{`.host-image-row { display: flex; flex-wrap: wrap; align-items: center;`, `.host-image { display: block; width: 30mm; height: 30mm;`} {
+		if stylesheet.Code != http.StatusOK || !strings.Contains(stylesheet.Body.String(), want) {
+			t.Fatalf("host-image styling missing %q: %d: %s", want, stylesheet.Code, stylesheet.Body.String())
 		}
 	}
 	imageResponse := request(handler, http.MethodGet, "/host-image", nil, cookie)
